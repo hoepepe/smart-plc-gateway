@@ -1,0 +1,6 @@
+{
+  "name": "Smart PLC Gateway",
+  "description": "Giao diện công nghiệp giám sát tín hiệu PLC với AI phân loại thời gian thực và phát hiện dị biệt OOD",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

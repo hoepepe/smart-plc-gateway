@@ -1,0 +1,78 @@
+{
+  "feature_version": 1,
+  "n_features": 16,
+  "classes": [
+    "COUNTER",
+    "MOTOR_LOAD",
+    "TEMPERATURE",
+    "VIBRATION"
+  ],
+  "ood_class": "PRESSURE_BURST",
+  "n_train": 192,
+  "n_test": 96,
+  "n_ood": 36,
+  "conf_threshold": 0.728,
+  "ood_threshold": 0.57,
+  "iso_threshold": -0.6294,
+  "conf_floor": 0.3,
+  "baseline_accuracy": 0.25,
+  "accuracy_raw": 1.0,
+  "accuracy_when_answered": 1.0,
+  "coverage": 0.875,
+  "ood_detection_rate": 1.0,
+  "false_alarm_rate": 0.0104,
+  "confusion_matrix": {
+    "labels": [
+      "COUNTER",
+      "MOTOR_LOAD",
+      "TEMPERATURE",
+      "VIBRATION"
+    ],
+    "matrix": [
+      [
+        24,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        24,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        24,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        24
+      ]
+    ]
+  },
+  "feature_importance": {
+    "mean": 0.01043,
+    "std": 0.01822,
+    "rms": 0.00692,
+    "slew_mean": 0.18317,
+    "slew_max": 0.01771,
+    "zcr": 0.09768,
+    "n_levels": 0.02366,
+    "kurtosis": 0.02401,
+    "skewness": 0.01739,
+    "peak_to_peak": 0.0,
+    "dom_freq": 0.0,
+    "spec_centroid": 0.09459,
+    "spec_entropy": 0.0562,
+    "lowband_ratio": 0.10019,
+    "acf_lag1": 0.13144,
+    "acf_lag20": 0.21839
+  },
+  "split_policy": "tách theo phiên thu thập, không tách ngẫu nhiên theo cửa sổ",
+  "threshold_policy": "ngưỡng chọn bằng cross-validation trên tập train, không dùng tập test"
+}

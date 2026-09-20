@@ -1,0 +1,16 @@
+# Cấu hình deploy cho Netlify.
+# Chỉ deploy phần giao diện — backend và MQTT broker chạy nội bộ trong mạng nhà máy,
+# nên bản public này luôn ở chế độ demo (dữ liệu sinh trong trình duyệt).
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# SPA: mọi đường dẫn đều trả về index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
