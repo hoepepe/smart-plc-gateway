@@ -1,130 +1,90 @@
 # Smart PLC Gateway
 
-Cổng kết nối giá rẻ giúp thu thập dữ liệu từ máy công nghiệp đời cũ, có khả năng **tự nhận diện loại tín hiệu** và **biết khi nào nó không nhận ra**.
+Thiết bị giá rẻ đọc dữ liệu từ máy PLC đời cũ — trạng thái máy, lực ép, lực xiết, áp lực khí nén — để tính OEE theo thời gian thực và phát hiện chu kỳ gia công bất thường. Không đụng vào máy: nguồn điện riêng, chỉ đọc, không sửa chương trình PLC.
 
-> Bài dự thi **DENSO Factory Hacks 2026 — Đề D1** (Kết nối PLC–IPC giá rẻ để thu dữ liệu).
+> Bài dự thi **DENSO Factory Hacks 2026 — đề D1** (Kết nối PLC–IPC giá rẻ để thu dữ liệu).
 
 ---
 
 ## Bài toán
 
-Nhà máy có nhiều máy đời cũ. Dữ liệu cảm biến bên trong không lấy ra được, và nhiều máy đã mất tài liệu kỹ thuật nên kỹ sư không biết dây nào đo đại lượng gì. Theo đề bài, chi phí trang bị IoT cho một máy hiện khoảng **30 triệu đồng**.
+Theo trả lời của mentor DENSO ngày 21/09/2026:
 
-Dự án này làm một gateway giá **dưới 1 triệu đồng**: đấu dây vào, thiết bị tự phân tích dạng sóng và đoán ra tín hiệu đang đo gì, rồi đẩy dữ liệu lên hệ thống giám sát.
+- DENSO **đã có danh sách tín hiệu** và muốn lấy dữ liệu **trực tiếp từ PLC**
+- Hiện dữ liệu PLC đời cũ được lấy **bằng tay qua thẻ nhớ**, và máy cũ **chưa được đưa lên hệ thống giám sát**
+- Bộ mở rộng truyền thông cho PLC tốn **khoảng 30 triệu mỗi máy**, chưa tính công và layout
+- Ba dòng PLC đang dùng nhiều: **Keyence KV-8000**, **Omron CJ2M-CPU33 và CPM2C**, **Mitsubishi Q10UDEHCPU**
+- Điều kiện gia công cần thu: áp lực khí nén, chiều cao, tải trọng, lực ép, lực xiết
+- Trạng thái máy: dừng, chuẩn bị vận hành, auto running, đang làm việc, hoàn thành, báo lỗi
+- Thiết bị thêm vào phải dùng **nguồn ngoài**, và nên **đi dây** trước để ổn định
 
-Điểm thiết kế quan trọng nhất: khi gặp tín hiệu chưa từng thấy, hệ thống **báo "không nhận ra" thay vì đoán bừa**.
+Gateway đọc các thanh ghi đó theo giao thức gốc của từng hãng, rồi làm hai việc:
+1. **Trạng thái máy → OEE**: độ sẵn sàng, hiệu suất, chất lượng, và nguyên nhân dừng máy xếp theo thời gian mất
+2. **Chu kỳ gia công → cảnh báo chất lượng**: chu kỳ ép hoặc siết có hình dạng lạ thường đi kèm chi tiết lỗi
 
 ---
 
 ## Cấu trúc
 
 ```
-src/
-  App.tsx              Điều phối trạng thái, vòng lặp tín hiệu, kết nối MQTT
-  types.ts             Kiểu dữ liệu dùng chung
-  components/          Navbar, ConsoleTab, EvaluationTab, RoiTab, Oscilloscope, ...
-  utils/
-    signal.ts          Trích đặc trưng + phân loại (bản mô phỏng cho giao diện)
-    mqtt.ts            Kết nối MQTT WebSocket, tự rơi về demo sau 3 giây
-  data/metrics.ts      Số liệu đánh giá, xuất từ ml/metrics.json
+src/                     Giao diện (React + TypeScript + Vite)
+  App.tsx                Điều phối mô phỏng, MQTT và bốn màn hình
+  data/machines.ts       Cấu hình 4 máy — PLC, giao thức, thanh ghi, mã lỗi
+  data/cycles.json       Tham số mô hình, xuất từ ml/cycles.py
+  utils/detector.ts      Khoảng cách Mahalanobis — đúng mô hình đã đánh giá
+  utils/oee.ts           OEE = sẵn sàng × hiệu suất × chất lượng
+  utils/sim.ts           Mô phỏng vận hành khi chưa có PLC thật
+  utils/mqtt.ts          Nối broker, tự về chế độ mô phỏng sau 3 giây
+  components/            MonitorTab, OeeTab, DetectionTab, ConnectTab
 
 ml/
-  features.py          Trích đặc trưng — BẢN CHUẨN của toàn dự án
-  signals.py           Sinh tín hiệu mô phỏng, tách tập theo phiên
-  train_eval.py        Huấn luyện + đánh giá, xuất metrics.json
-  analysis.py          PCA, đường cong học, phát hiện lỗi, suy giảm -> analysis.json
-  gateway_sim.py       Giả lập gateway, phát MQTT thật
+  cycles.py              Sinh chu kỳ gia công, huấn luyện và đánh giá, xuất cycles.json
+  gateway_sim.py         Giả lập gateway, phát MQTT đúng schema của gateway thật
+  legacy_nhan_dien_tin_hieu/   Hướng cũ: AI đoán dây — xem README trong đó
 
 backend/
-  main.py              Nhận MQTT → lưu SQLite → phục vụ REST API
-  requirements.txt
+  main.py                Nhận MQTT → SQLite → REST API, tính OEE và nguyên nhân dừng máy
 ```
 
 ## Luồng dữ liệu
 
 ```
-gateway (hoặc gateway_sim.py)
-        │ MQTT  gw/01/ch/{n}/pred
-        ▼
-   Mosquitto broker
-        ├──── WebSocket 9001 ────► dashboard (hiển thị realtime)
-        └──── TCP 1883 ──────────► backend/main.py ──► SQLite
-                                          │
-                                          └──► REST API :8000
+PLC (Keyence / Omron / Mitsubishi)
+   │  giao thức gốc của hãng, CHỈ ĐỌC
+   ▼
+Gateway ── tính đặc trưng chu kỳ, chấm điểm bất thường tại chỗ
+   │  MQTT  gw/01/m/{máy}/state   gw/01/m/{máy}/cycle
+   ▼
+Broker MQTT (Mosquitto, trong mạng nội bộ)
+   ├── WebSocket 9001 ──► giao diện
+   └── TCP 1883 ────────► backend/main.py ──► SQLite ──► REST API :8000
 ```
 
 ---
 
 ## Chạy thử
 
-### Giao diện web
+### Giao diện
 
 ```bash
 npm install
 npm run dev
 ```
 
-Mở `http://localhost:3000`. Không có MQTT broker thì giao diện tự chạy ở chế độ demo.
+Mở `http://localhost:3000`. Không có broker thì giao diện tự chạy chế độ mô phỏng.
 
-### Huấn luyện và đánh giá mô hình
+### Mô hình phát hiện chu kỳ bất thường
 
 ```bash
 cd ml
-pip install numpy scipy scikit-learn joblib
-python train_eval.py
+pip install numpy scikit-learn
+python cycles.py
+cp cycles.json ../src/data/cycles.json
 ```
 
-In ra ma trận nhầm lẫn, so sánh với baseline, và xuất `model.joblib` + `metrics.json`.
+### Chạy đủ chuỗi: broker → gateway giả lập → máy chủ → giao diện
 
-### Phân tích bổ sung
-
-```bash
-python analysis.py
-```
-
-Xuất `analysis.json` cho tab **Phân tích chuyên sâu** trên dashboard, gồm bốn phần:
-
-| Phần | Nội dung | Kết quả đo được |
-|---|---|---|
-| Bản đồ đặc trưng | Chiếu 16 đặc trưng xuống 2 chiều bằng PCA | 2 thành phần giữ 71.6% phương sai |
-| Đường cong học | Số lần kỹ sư can thiệp qua 5 đợt triển khai | 3 lần cho 20 máy, so với 20 lần nếu làm thủ công |
-| Phát hiện lỗi lắp đặt | 5 dạng lỗi, hai lớp bảo vệ | Đấu ngược cực 100% (luật), dây lỏng 100% (mô hình), kênh chết 100%, nhiễu trắng 70%, bão hòa 60% |
-| Suy giảm cảm biến | Cảm biến xuống cấp dần qua 12 tháng | Cảnh báo lẻ tẻ từ tháng 7, vượt ngưỡng tháng 11 |
-
-Sau khi chạy, copy `analysis.json` sang `src/data/` để dashboard đọc.
-
-### Backend (nhận MQTT, lưu dữ liệu, phục vụ API)
-
-```bash
-cd backend
-pip install -r requirements.txt
-python main.py
-```
-
-API chạy ở `http://localhost:8000`, tài liệu tương tác tại `http://localhost:8000/docs`.
-Không có broker vẫn chạy được — API hoạt động bình thường, chỉ là không nhận dữ liệu mới.
-
-| Endpoint | Công dụng |
-|---|---|
-| `GET /api/health` | Backend sống chưa, đã nối MQTT chưa, đã nhận bao nhiêu bản tin |
-| `GET /api/channels` | Trạng thái mới nhất của từng kênh |
-| `GET /api/channels/{n}/history` | Lịch sử phán đoán một kênh, có phân trang |
-| `POST /api/channels/{n}/label` | Kỹ sư xác nhận nhãn, gửi ngược xuống gateway |
-| `GET /api/labels` | Nhật ký gán nhãn |
-| `GET /api/training-data` | Xuất cặp (đặc trưng, nhãn) để huấn luyện lại |
-| `GET /api/metrics` | Số liệu tổng hợp cho KPI |
-
-Dữ liệu lưu vào `backend/gateway.db` (SQLite, tự tạo khi chạy lần đầu).
-
-### Giả lập gateway phát MQTT
-
-```bash
-pip install paho-mqtt
-python gateway_sim.py --dry-run   # in ra màn hình, không cần broker
-python gateway_sim.py             # phát MQTT thật
-```
-
-Cấu hình Mosquitto (`mosquitto.conf`) — **nhớ bật cả cổng WebSocket**, nếu không trình duyệt không kết nối được:
+Cài Mosquitto, thêm vào `mosquitto.conf` — **phải bật cả cổng WebSocket**, nếu không trình duyệt không nối được:
 
 ```
 listener 1883
@@ -136,26 +96,48 @@ protocol websockets
 allow_anonymous true
 ```
 
+Rồi mở ba cửa sổ dòng lệnh:
+
+```bash
+mosquitto -c mosquitto.conf                     # 1. broker
+cd backend && pip install -r requirements.txt && python main.py   # 2. máy chủ
+cd ml && pip install paho-mqtt && python gateway_sim.py            # 3. gateway giả lập
+```
+
+Mở giao diện: góc trên đổi thành **Đã nối gateway**. API máy chủ xem tại `http://localhost:8000/docs`.
+
+| Endpoint | Công dụng |
+|---|---|
+| `GET /api/health` | Máy chủ sống chưa, đã nối MQTT chưa, đã nhận bao nhiêu bản tin |
+| `GET /api/machines` | Trạng thái hiện tại và OEE từng máy |
+| `GET /api/machines/{id}/states` | Lịch sử trạng thái |
+| `GET /api/machines/{id}/cycles` | Chu kỳ gần đây, lọc được chu kỳ bất thường |
+| `GET /api/machines/{id}/oee` | OEE một máy |
+| `GET /api/stops` | Nguyên nhân dừng máy, xếp theo thời gian mất |
+
 ---
 
-## Về các con số trong dự án
+## Kết quả đo được
 
-Toàn bộ số liệu ở tab **Đánh giá mô hình** đo trên **dữ liệu mô phỏng**, chưa phải tín hiệu PLC thật.
+Đo trên chu kỳ **mô phỏng**, tách theo ca làm việc: 20 ca để học, 6 ca để chọn ngưỡng, 6 ca để kiểm tra — không ca nào dùng chung. Chỉ học trên chu kỳ bình thường, vì nhà máy có rất ít dữ liệu lỗi.
 
-Hai điều cần nói rõ:
+| Đại lượng | Bắt lỗi trung bình | Báo động giả |
+|---|---|---|
+| Lực ép | 99,4% | 0,7% |
+| Lực xiết | 100% | 0,7% |
+| Áp lực khí nén | 70,6% | 0% |
 
-**Vì sao độ chính xác đạt 100%.** Tín hiệu mô phỏng sinh bằng công thức toán nên bốn loại tách nhau rất rõ. Tín hiệu thật từ máy trong xưởng sẽ nhiễu hơn nhiều, và con số này chắc chắn giảm. Kết quả hiện tại cho thấy quy trình huấn luyện và đánh giá chạy đúng, chưa nói lên độ tin cậy khi lắp vào nhà máy.
+**Chỗ còn yếu:** van kẹt chỉ bắt được 33%, nguồn khí yếu 78%. Giao diện ghi rõ giả thuyết nguyên nhân và hướng sửa cho từng dạng.
 
-**Hai lớp bảo vệ, không lớp nào thay được lớp kia.** Đấu ngược cực làm điện áp đảo dấu nhưng giữ nguyên mọi đặc trưng thống kê, và `features.py` chuẩn hóa biên độ nên mô hình bắt 0% — luật kiểm tra dải tuyệt đối bắt 100%. Ngược lại, dây lỏng nằm trong dải hợp lệ nên luật chỉ bắt 3%, mô hình bắt 100%. Vì vậy `checkWiring()` chạy trước mô hình, và cả hai cùng tồn tại.
+**Vì sao chọn khoảng cách Mahalanobis thay vì Isolation Forest:** trên 9 dạng lỗi, Mahalanobis bắt tốt hơn ở 5 dạng, ngang ở 2, kém ở 2. Nó chỉ cần một vector và một ma trận 9×9 nên chạy được trên ESP32, và chỉ ra được đặc trưng nào lệch — kỹ sư biết vì sao máy bị cảnh báo.
 
-**Ngưỡng tin cậy một mình không phát hiện được tín hiệu lạ.** Đo được: chỉ dùng ngưỡng tin cậy bắt được 8.3%; thêm mô hình one-class (Isolation Forest) lên 100%, báo động giả 3.1%. Random Forest vẫn cho độ tin cậy tới 0.93 trên tín hiệu chưa từng thấy, vì nó buộc phải chọn một trong các lớp đã biết.
-
-Các thông số phần cứng đánh dấu **"chưa đo"** sẽ được cập nhật sau khi lắp ráp và nạp firmware.
+**Chất lượng trong OEE là ước tính** — nó đếm chu kỳ bị gắn cờ, mà chu kỳ bất thường mới là nghi lỗi. Nối kết quả kiểm tra QC sẽ chính xác hơn.
 
 ---
 
-## Lưu ý kỹ thuật
+## Những điều chưa biết
 
-`utils/signal.ts` dùng **luật ngưỡng viết tay** để giao diện chạy được realtime trong trình duyệt. Mô hình thật (Random Forest + Isolation Forest, scikit-learn) nằm ở `ml/train_eval.py` và chạy trên thiết bị. Hai bản này khác nhau về số đặc trưng và kích thước cửa sổ — mọi con số công bố đều lấy từ bản Python.
-
-`ml/features.py` là **bản chuẩn duy nhất** cho việc trích đặc trưng. Thứ tự đặc trưng trong đó không được đổi; nếu thêm, thêm vào cuối và tăng `FEATURE_VERSION`.
+- **Vì sao cần bộ mở rộng 30 triệu khi cả ba CPU đã có cổng Ethernet?** Nếu cổng đang bận cho HMI, gateway cũng phải thêm phần cứng. Cần hỏi mentor trước khi dùng con số tiết kiệm.
+- **Thẻ nhớ được rút bao lâu một lần?** Đây là vế "trước" của phép đo độ trễ dữ liệu.
+- **Giao thức và lệnh đọc từng dòng PLC** trong `machines.ts` cần đối chiếu manual của hãng.
+- Chưa có PLC thật để thử. Toàn bộ trạng thái máy là mô phỏng.

@@ -1,123 +1,90 @@
 import mqtt, { MqttClient } from 'mqtt';
-import { SignalClass } from '../types';
-
-export interface MqttPredPayload {
-  ts: number;
-  cls: SignalClass;
-  conf: number;
-  ood: boolean;
-  state: 'auto' | 'pending' | 'confirmed';
-  feat?: {
-    mean?: number;
-    std?: number;
-    zcr?: number;
-    slew?: number;
-    kurt?: number;
-    [key: string]: number | undefined;
-  };
-}
-
-export interface MqttConnectionHandlers {
-  onStatusChange: (status: 'connected' | 'demo' | 'connecting') => void;
-  onPredMessage?: (channelId: number, payload: MqttPredPayload) => void;
-  onError?: (err: Error) => void;
-}
+import { MachineState } from '../types';
 
 /**
- * Module kết nối MQTT WebSocket tới Broker tại biên (Edge Broker).
- * Topic quy chuẩn: gw/01/ch/{n}/pred
+ * Kết nối MQTT (WebSocket) tới broker trong mạng nội bộ.
  *
- * Nếu không kết nối được sau 3 giây (ví dụ chạy trên máy tính phát triển không có broker),
- * hệ thống tự động rơi về Chế độ demo (mô phỏng tín hiệu).
+ * Gateway phát hai loại bản tin cho mỗi máy:
+ *   gw/{gw}/m/{machineId}/state   — mỗi khi trạng thái máy thay đổi
+ *   gw/{gw}/m/{machineId}/cycle   — mỗi khi một chu kỳ gia công kết thúc
+ *
+ * Không nối được broker sau 3 giây thì giao diện tự chạy chế độ mô phỏng.
  */
-export function connectMqtt(
-  brokerUrl: string = 'ws://localhost:9001',
-  handlers: MqttConnectionHandlers
-): { disconnect: () => void } {
-  let isConnected = false;
-  let client: MqttClient | null = null;
-  handlers.onStatusChange('connecting');
 
-  // Timer 3 giây: nếu chưa kết nối được thì tự động rơi về chế độ demo
-  const fallbackTimer = setTimeout(() => {
-    if (!isConnected) {
-      handlers.onStatusChange('demo');
-      if (client) {
-        try {
-          client.end(true);
-        } catch {
-          // ignore
-        }
-      }
+export interface StatePayload {
+  ts: number;
+  state: MachineState;
+  errorCode?: string;
+}
+
+export interface CyclePayload {
+  ts: number;
+  y: number[];       // đường cong chu kỳ đọc từ thanh ghi PLC
+  f: number[];       // 9 đặc trưng, gateway tính sẵn theo đúng ml/cycles.py
+  score?: number;    // điểm Mahalanobis gateway tính — giao diện tính lại để đối chiếu
+}
+
+export type ConnStatus = 'connecting' | 'connected' | 'demo';
+
+export interface Handlers {
+  onStatus: (s: ConnStatus) => void;
+  onState?: (machineId: string, p: StatePayload) => void;
+  onCycle?: (machineId: string, p: CyclePayload) => void;
+}
+
+export function connectMqtt(url: string, gwId: string, h: Handlers): { disconnect: () => void } {
+  let connected = false;
+  let client: MqttClient | null = null;
+  h.onStatus('connecting');
+
+  const fallback = setTimeout(() => {
+    if (!connected) {
+      h.onStatus('demo');
+      try { client?.end(true); } catch { /* bỏ qua */ }
     }
   }, 3000);
 
   try {
-    client = mqtt.connect(brokerUrl, {
-      connectTimeout: 3000,
-      reconnectPeriod: 0, // Không thử reconnect liên tục để tránh spam console khi chạy web demo
-      clean: true,
-    });
+    client = mqtt.connect(url, { connectTimeout: 3000, reconnectPeriod: 0, clean: true });
 
     client.on('connect', () => {
-      isConnected = true;
-      clearTimeout(fallbackTimer);
-      handlers.onStatusChange('connected');
-
-      // Subscribe topic tất cả các kênh: gw/01/ch/+/pred
-      client?.subscribe('gw/01/ch/+/pred', (err) => {
-        if (err) {
-          console.warn('[MQTT] Lỗi khi subscribe topic:', err);
-        }
-      });
+      connected = true;
+      clearTimeout(fallback);
+      h.onStatus('connected');
+      client?.subscribe([`gw/${gwId}/m/+/state`, `gw/${gwId}/m/+/cycle`]);
     });
 
-    client.on('message', (topic, message) => {
+    client.on('message', (topic, msg) => {
+      const parts = topic.split('/');
+      const i = parts.indexOf('m');
+      const machineId = i >= 0 ? parts[i + 1] : undefined;
+      const kind = parts[parts.length - 1];
+      if (!machineId) return;
       try {
-        // Parse channel id từ topic gw/01/ch/{id}/pred
-        const parts = topic.split('/');
-        const chIdx = parts.indexOf('ch');
-        const channelId = chIdx !== -1 && parts[chIdx + 1] ? parseInt(parts[chIdx + 1], 10) : 1;
-
-        const payload: MqttPredPayload = JSON.parse(message.toString());
-        if (handlers.onPredMessage) {
-          handlers.onPredMessage(channelId, payload);
-        }
-      } catch (e) {
-        console.warn('[MQTT] Lỗi parse payload JSON:', e);
+        const payload = JSON.parse(msg.toString());
+        if (kind === 'state') h.onState?.(machineId, payload as StatePayload);
+        if (kind === 'cycle') h.onCycle?.(machineId, payload as CyclePayload);
+      } catch {
+        // bản tin hỏng thì bỏ qua, không làm sập giao diện
       }
     });
 
-    client.on('error', (err) => {
-      if (!isConnected) {
-        clearTimeout(fallbackTimer);
-        handlers.onStatusChange('demo');
-      }
-      if (handlers.onError) {
-        handlers.onError(err);
-      }
-    });
-
+    const giveUp = () => {
+      if (!connected) { clearTimeout(fallback); h.onStatus('demo'); }
+    };
+    client.on('error', giveUp);
     client.on('close', () => {
-      if (!isConnected) {
-        handlers.onStatusChange('demo');
-      }
+      if (connected) { connected = false; h.onStatus('demo'); } else giveUp();
     });
-  } catch (err) {
-    clearTimeout(fallbackTimer);
-    handlers.onStatusChange('demo');
+  } catch {
+    clearTimeout(fallback);
+    h.onStatus('demo');
   }
 
   return {
     disconnect: () => {
-      clearTimeout(fallbackTimer);
-      if (client) {
-        try {
-          client.end(true);
-        } catch {
-          // ignore
-        }
-      }
+      clearTimeout(fallback);
+      try { client?.end(true); } catch { /* bỏ qua */ }
     },
   };
 }
