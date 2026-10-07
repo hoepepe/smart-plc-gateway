@@ -38,7 +38,19 @@ export default function App() {
   }
   const [, setTick] = useState(0);
   const [tab, setTab] = useState<TabId>('monitor');
-  const [selected, setSelected] = useState(MACHINES[0].id);
+  // Mở thẳng một máy qua đường link, ví dụ http://192.168.10.10:3000/?may=M02
+  // — đây là đường link nằm trong mã QR hiện trên OLED của gateway gắn ở máy đó.
+  const [selected, setSelected] = useState(() => {
+    const may = new URLSearchParams(window.location.search).get('may');
+    return MACHINES.some((m) => m.id === may) ? (may as string) : MACHINES[0].id;
+  });
+
+  // Đổi máy thì cập nhật đường link, để kỹ sư gửi link cho người khác vẫn mở đúng máy
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('may', selected);
+    window.history.replaceState(null, '', url);
+  }, [selected]);
   const [conn, setConn] = useState<ConnStatus>('connecting');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const connRef = useRef<ConnStatus>('connecting');

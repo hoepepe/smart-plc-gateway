@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Lock, Cpu, Cable, AlertOctagon, Zap, PauseCircle } from 'lucide-react';
 import { MachineRuntime } from '../types';
 import { MACHINES, STATE_META, FEATURE_VI } from '../data/machines';
@@ -26,6 +26,15 @@ export function MonitorTab({ rt, now, selected, onSelect, onInjectFault, onForce
   const meta = STATE_META[r.state];
   const [fault, setFault] = useState<string>(Object.keys(p.samples.faults)[0]);
   const faults = p.metrics.faults;
+
+  // Mở từ mã QR trên gateway (link có ?may=...): cuộn thẳng tới phần chi tiết của máy đó,
+  // để kỹ sư quét bằng điện thoại là thấy ngay, không phải tìm trong danh sách.
+  const detailRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('may')) {
+      setTimeout(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+    }
+  }, []);
 
   return (
     <div className="space-y-5">
@@ -80,7 +89,7 @@ export function MonitorTab({ rt, now, selected, onSelect, onInjectFault, onForce
       </div>
 
       {/* ─── Máy đang chọn ─── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div ref={detailRef} className="grid grid-cols-1 lg:grid-cols-3 gap-5 scroll-mt-4">
         <Card className="lg:col-span-2"
           title={<span>{m.name} — {p.vi} từng chu kỳ</span>}
           sub={`Đường đậm là chu kỳ vừa đọc từ PLC. Vùng xám nhạt là dải 90% chu kỳ bình thường (${p.metrics.n_test_normal} chu kỳ từ tập kiểm tra).`}
