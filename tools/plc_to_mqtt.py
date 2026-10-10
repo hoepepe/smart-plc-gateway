@@ -73,7 +73,7 @@ def source_serial(port, baud):
             ms = int(ms)
             if t_base is None:
                 t_base = time.time() - ms / 1000.0
-            yield t_base + ms / 1000.0, signed(int(d100)), int(d110), int(m)
+            yield t_base + ms / 1000.0, signed(int(d100)), int(d102), int(d110), int(m)
         except ValueError:
             continue
 
@@ -89,15 +89,22 @@ def source_plc(ip, port, hz):
     while True:
         d = plc.batchread_wordunits(headdevice="D100", readsize=11)    # D100..D110
         m = plc.batchread_wordunits(headdevice="M0", readsize=1)[0]
-        yield time.time(), signed(d[0] & 0xFFFF), d[10] & 0xFFFF, m & 0xFFFF
+        yield time.time(), signed(d[0] & 0xFFFF), d[2] & 0xFFFF, d[10] & 0xFFFF, m & 0xFFFF
         nxt += period
         time.sleep(max(0.0, nxt - time.time()))
 
 
 # ───────── Xử lý ─────────
-def load_model(proc):
-    with open(os.path.join(HERE, "..", "ml", "cycles.json"), encoding="utf-8") as f:
-        mdl = json.load(f)["processes"][proc]["model"]
+def load_model(proc, path=None):
+    """Mặc định lấy mô hình của quy trình trong ml/cycles.json.
+    --model <file.json> (vd. ml/models/pyscrew_s03.json) thì dùng mô hình trong file đó."""
+    if path:
+        with open(path, encoding="utf-8") as f:
+            mdl = json.load(f)["model"]
+        print(f"Dùng mô hình {path}")
+    else:
+        with open(os.path.join(HERE, "..", "ml", "cycles.json"), encoding="utf-8") as f:
+            mdl = json.load(f)["processes"][proc]["model"]
     return np.array(mdl["mu"]), np.array(mdl["inv_cov"]), float(mdl["threshold"])
 
 
@@ -121,6 +128,7 @@ def main():
     ap.add_argument("--machine", default="M01")
     ap.add_argument("--process", default="PRESS_FORCE")
     ap.add_argument("--scale", type=float, default=0.01, help="đổi D100 sang đơn vị thật (0,01 kN mỗi đơn vị)")
+    ap.add_argument("--model", help="file mô hình riêng, vd. ml/models/pyscrew_s03.json (khi đó dùng --scale 0.001)")
     ap.add_argument("--log-csv", help="ghi mỗi chu kỳ ra file CSV để train lại, ví dụ cycles_M01.csv — "
                                       "bắt buộc nếu muốn train trên PLC thật, xem train_from_csv.py")
     a = ap.parse_args()
@@ -131,10 +139,13 @@ def main():
         csv_file = open(a.log_csv, "a", newline="", encoding="utf-8")
         csv_writer = csv.writer(csv_file)
         if is_new:
-            csv_writer.writerow(["ts", "n_samples", "y"])   # y: các giá trị trong chu kỳ, cách nhau bằng ";"
+            # y: các giá trị trong chu kỳ, cách nhau bằng ";"
+            # tag: giá trị D102 lúc chu kỳ kết thúc — khi phát lại dữ liệu (tools/phat_lai_vao_plc.py)
+            #      đây là số thứ tự chu kỳ, dùng để đối chiếu với nhãn đúng
+            csv_writer.writerow(["ts", "n_samples", "y", "tag", "score"])
         print(f"Đang ghi mỗi chu kỳ vào {a.log_csv}")
 
-    mu, inv, thr = load_model(a.process)
+    mu, inv, thr = load_model(a.process, a.model)
 
     try:
         cli = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=f"bridge-{a.machine}")
@@ -148,12 +159,12 @@ def main():
     stream = source_serial(a.serial, a.baud) if a.serial else source_plc(a.plc, a.plc_port, a.hz)
 
     last_state, last_sent = None, 0.0
-    buf_t, buf_y, in_cycle, n_cycle, n_flag = [], [], False, 0, 0
+    buf_t, buf_y, in_cycle, n_cycle, n_flag, tag = [], [], False, 0, 0, 0
     # Chỉ nhận chu kỳ bắt đầu SAU khi script đã chạy. Nếu khởi động đúng lúc máy đang ép dở,
     # chu kỳ đó bị cắt cụt và sẽ bị chấm nhầm là bất thường — nên bỏ qua.
     armed = False
 
-    for t, d100, d110, m in stream:
+    for t, d100, d102, d110, m in stream:
         st = state_from_bits(m)
         err = f"E{d110}" if (st == "ERROR" and d110) else None
 
@@ -175,6 +186,7 @@ def main():
         if working:
             buf_t.append(t)
             buf_y.append(d100 * a.scale)
+            tag = d102
             in_cycle = True
         elif in_cycle:
             in_cycle = False
@@ -191,13 +203,14 @@ def main():
                     "y": [round(float(v), 3) for v in y],
                     "f": [round(float(v), 5) for v in f],
                     "score": round(score, 3),
+                    "tag": tag,
                 }))
                 if csv_writer:
-                    csv_writer.writerow([int(t * 1000), len(y), ";".join(f"{v:.4f}" for v in y)])
+                    csv_writer.writerow([int(t * 1000), len(y), ";".join(f"{v:.4f}" for v in y), tag, round(score, 4)])
                     csv_file.flush()   # ghi ngay — tắt script giữa chừng không mất chu kỳ vừa ghi
-                tag = "BẤT THƯỜNG" if flag else "bình thường"
-                print(f"  Chu kỳ #{n_cycle}: {len(buf_t)} lần đọc → {len(y)} mẫu, "
-                      f"điểm {score:.2f} / ngưỡng {thr:.2f} → {tag}   "
+                verdict = "BẤT THƯỜNG" if flag else "bình thường"
+                print(f"  Chu kỳ #{n_cycle} (D102={tag}): {len(buf_t)} lần đọc → {len(y)} mẫu, "
+                      f"điểm {score:.2f} / ngưỡng {thr:.2f} → {verdict}   "
                       f"(đã gắn cờ {n_flag}/{n_cycle})")
             buf_t, buf_y = [], []
 

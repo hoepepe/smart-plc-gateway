@@ -12,3 +12,6 @@ coverage/
 *.joblib
 __pycache__/
 *.pyc
+
+# Dữ liệu tải về/sinh ra từ bộ dữ liệu công khai (kiểm tra giấy phép trước khi đưa lên repo)
+ml/data/

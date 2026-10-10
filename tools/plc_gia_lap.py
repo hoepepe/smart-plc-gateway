@@ -5,6 +5,8 @@ Dùng khi chưa có PLC thật, hoặc PLC thật chưa có chương trình tạ
 
     python plc_gia_lap.py                 # chờ ở cổng 5000
     python plc_gia_lap.py --port 5001
+    python plc_gia_lap.py --passive       # không tự sinh dữ liệu; chỉ giữ giá trị do lệnh GHI gửi tới
+                                          # (dùng với tools/phat_lai_vao_plc.py, giống PLC thật ở chế độ STOP)
 
 Bảng thanh ghi giống máy M01 trong src/data/machines.ts:
     D100     lực ép, đơn vị 0,01 kN (số nguyên có dấu)
@@ -16,7 +18,8 @@ Dữ liệu phát lại đúng các chu kỳ ép từ ml/cycles.py (cùng bộ s
 100 mẫu mỗi giây. Cứ vài chu kỳ chèn một chu kỳ lỗi — PLC KHÔNG báo lỗi ở chu kỳ này,
 chỉ AI mới phát hiện. Thỉnh thoảng máy báo lỗi thật (M5 + D110) trong vài giây.
 
-Chỉ hỗ trợ lệnh đọc liên tiếp theo word (0x0401 / 0x0000) với thanh ghi D và M.
+Hỗ trợ lệnh đọc (0x0401) và ghi (0x1401) liên tiếp theo word, sub 0x0000, với thanh ghi D và M
+(với M chỉ hỗ trợ word đầu tiên M0..M15).
 Khi trình bày phải nói rõ đây là giả lập, không gọi là PLC thật.
 """
 import argparse
@@ -100,7 +103,17 @@ def handle(conn, addr):
             dev_no = int.from_bytes(req[15:18], "little")
             dev_code, pts = req[18], struct.unpack("<H", req[19:21])[0]
 
-            if cmd == 0x0401 and sub == 0x0000 and dev_code in (DEV_D, DEV_M) and pts <= 64:
+            if cmd == 0x1401 and sub == 0x0000 and dev_code in (DEV_D, DEV_M) and pts <= 64:
+                data = req[21:21 + 2 * pts]
+                words = [struct.unpack("<H", data[2 * j:2 * j + 2])[0] for j in range(len(data) // 2)]
+                with lock:
+                    if dev_code == DEV_D:
+                        for j, w in enumerate(words):
+                            state["d"][dev_no + j] = w
+                    elif dev_no == 0 and words:
+                        state["m"] = words[0]
+                body = b"\x00\x00"
+            elif cmd == 0x0401 and sub == 0x0000 and dev_code in (DEV_D, DEV_M) and pts <= 64:
                 with lock:
                     if dev_code == DEV_D:
                         words = [state["d"].get(dev_no + j, 0) for j in range(pts)]
@@ -117,9 +130,14 @@ def handle(conn, addr):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=5000)
+    ap.add_argument("--passive", action="store_true",
+                    help="không tự phát chu kỳ; chỉ nhận lệnh ghi từ tools/phat_lai_vao_plc.py")
     a = ap.parse_args()
 
-    threading.Thread(target=player, daemon=True).start()
+    if a.passive:
+        print("[giả lập] Chế độ THỤ ĐỘNG: thanh ghi chỉ đổi khi có lệnh ghi")
+    else:
+        threading.Thread(target=player, daemon=True).start()
     srv = socket.socket()
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("0.0.0.0", a.port))
