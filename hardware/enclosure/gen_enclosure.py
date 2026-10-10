@@ -44,7 +44,8 @@ MODULES = {
     "HW500":   (72, 78, 30.0, 20.0, LEDGE, "Module HW-500 (kích thước giả định — ĐO LẠI)"),
 }
 # OLED SSD1306 0.96" gắn dưới nắp
-OLED = dict(x=58, y=50, L=27.3, W=27.8, win_dx=2.0, win_dy=6.0, win_L=23.5, win_W=13.0,
+# 0.96" SSD1306: PCB 27 × 27, dày 4,1, vùng hiển thị 21,74 × 11,2 (datasheet module)
+OLED = dict(x=58, y=50, L=27.0, W=27.0, win_dx=2.0, win_dy=7.0, win_L=23.0, win_W=13.0,
             hole_inset=2.0, hole_r=0.9, post_h=4.0)
 
 # ───────────────────────── Lỗ khoét vách ─────────────────────────
@@ -165,8 +166,13 @@ def make_lid():
             lid = lid + cyl(hx, hy, -o["post_h"], o["post_h"], 2.2) - cyl(hx, hy, -o["post_h"] - 1, o["post_h"] + 0.5, o["hole_r"])
     # khe thông gió trên LM2596 và ESP32
     for i in range(9):
-        lid = lid - box(108 + i * 5, 72, -1, 2.0, 24, LID_T + 2)
-        lid = lid - box(108 + i * 5, 44, -1, 2.0, 20, LID_T + 2)
+        lid = lid - box(108 + i * 5, 72, -1, 2.0, 24, LID_T + 2)     # trên LM2596
+    for i in range(7):
+        lid = lid - box(108 + i * 5, 44, -1, 2.0, 20, LID_T + 2)     # trên ESP32, chừa chỗ lỗ nút
+    # 2 lỗ kim Ø3 trên nút EN (reset) và BOOT của ESP32 — bấm bằng que nhựa/kim
+    ex, ey, eL, eW = MODULES["ESP32"][:4]
+    for by in (ey + 4.0, ey + eW - 4.0):
+        lid = lid - cyl(ex + eL - 6.0, by, -1, LID_T + 2, 1.6)
     # 2 lỗ LED trạng thái Ø5 (nguồn, kết nối PLC)
     for lx in (20, 30):
         lid = lid - cyl(lx, IN_W - 12, -1, LID_T + 2, 2.6)
