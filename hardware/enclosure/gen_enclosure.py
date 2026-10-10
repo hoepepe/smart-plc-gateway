@@ -22,7 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "out")
 
 # ───────────────────────── Hộp ─────────────────────────
-IN_L, IN_W, IN_H = 160.0, 105.0, 40.0   # lòng hộp
+IN_L, IN_W, IN_H = 160.0, 105.0, 55.0   # lòng hộp (cao 55 để đủ chỗ dây dupont)
 WALL, FLOOR = 2.5, 3.0
 LID_T, LIP_H, LIP_T, FIT = 2.5, 4.0, 1.6, 0.3
 BOSS_R, PILOT_R, SCREW_R = 4.0, 1.25, 1.7     # cột vít góc, lỗ mồi M3, lỗ thông M3
@@ -31,37 +31,46 @@ SEG = 48
 
 # ───────────────────────── Module (đo lại bằng thước kẹp!) ─────────────────────────
 # tên: (x, y, dài, rộng, độ cao mặt dưới PCB so với đáy, mô tả)
-LEDGE = 8.0      # chừa 8 mm dưới PCB cho chân hàn / header cắm xuống
+# Bản demo cắm dây dupont cái vào chân đực của module, nên cần chừa chỗ cho đầu dupont:
+#   chân cắm xuống (header hàn sẵn mặt dưới, như ESP32): PCB kê cao 28 mm → đầu dupont dài 14 mm + chỗ uốn dây
+#   chân hướng lên (tự hàn header hướng lên, như ADS1115, MPU6050): PCB kê thấp 6 mm, dây đi phía trên
+DOWN, UP = 28.0, 6.0
 PCB_T = 1.6
 MODULES = {
-    "W5500":   (1.5, 10, 55.0, 28.0, LEDGE, "W5500 Ethernet, RJ45 quay ra vách trái"),
-    "RS232":   (1.5, 48, 33.0, 30.0, LEDGE, "TTL-RS232 MAX3232, DB9 quay ra vách trái"),
-    "PC817":   (65, 3, 40.0, 30.0, LEDGE, "PC817 4 kênh, dây vào qua 2 ốc siết cáp mặt trước"),
-    "ADS1115": (115, 8, 28.0, 18.0, LEDGE, "ADS1115, dây cảm biến qua ốc siết cáp"),
-    "ESP32":   (102, 40, 55.0, 28.0, LEDGE, "ESP32 DevKit V1 38 chân, cổng USB ra vách phải"),
-    "LM2596":  (106, 78, 43.0, 21.0, LEDGE, "LM2596 hạ áp 24V→5V, gần jack DC"),
-    "MPU6050": (34, 84, 21.0, 16.0, LEDGE, "GY-521 MPU6050"),
-    "HW685":   (59, 78, 42.0, 25.0, LEDGE, "HW-685 đổi 4–20 mA → 0–3,3 V, nguồn 7–36 V"),
+    "W5500":   (1.5, 10, 55.0, 28.0, DOWN, "W5500 Ethernet, RJ45 quay ra vách trái"),
+    "RS232":   (1.5, 48, 33.0, 30.0, DOWN, "TTL-RS232 MAX3232, DB9 quay ra vách trái"),
+    "PC817":   (65, 6, 40.0, 30.0, DOWN, "PC817 4 kênh, dây vào qua 2 ốc siết cáp mặt trước"),
+    "ADS1115": (115, 8, 28.0, 18.0, UP, "ADS1115 — hàn header HƯỚNG LÊN"),
+    "ESP32":   (102, 40, 55.0, 28.0, DOWN, "ESP32 DevKit V1 38 chân, cổng USB ra vách phải"),
+    "LM2596":  (106, 78, 43.0, 21.0, UP, "LM2596 hạ áp 24V→5V, dây hàn/bắt vít phía trên"),
+    "MPU6050": (34, 84, 21.0, 16.0, UP, "GY-521 MPU6050 — hàn header HƯỚNG LÊN"),
+    "HW685":   (59, 78, 42.0, 25.0, DOWN, "HW-685 đổi 4–20 mA → 0–3,3 V, nguồn 7–36 V"),
 }
+PINS = {k: ("down" if v[4] == DOWN else "up") for k, v in MODULES.items()}
+LEDGE = DOWN
 # OLED SSD1306 0.96" gắn dưới nắp
 # 0.96" SSD1306: PCB 27 × 27, dày 4,1, vùng hiển thị 21,74 × 11,2 (datasheet module)
 OLED = dict(x=58, y=50, L=27.0, W=27.0, win_dx=2.0, win_dy=7.0, win_L=23.0, win_W=13.0,
             hole_inset=2.0, hole_r=0.9, post_h=4.0)
 
 # ───────────────────────── Lỗ khoét vách ─────────────────────────
-PCB_TOP = LEDGE + PCB_T
+def _top(name):
+    return MODULES[name][4] + PCB_T
+
+
+ZW = 34.0     # độ cao tâm lỗ cho phụ kiện không gắn PCB (jack DC, ốc siết cáp)
 CUTS = [
     # (vách, tâm theo trục ngang của vách, tâm z, rộng, cao, hình, ghi chú)
-    ("left", 10 + 14, PCB_TOP + 7.0, 17.0, 15.0, "rect", "RJ45"),
-    ("left", 48 + 15, PCB_TOP + 6.0, 20.0, 12.0, "rect", "DB9"),
-    ("right", 40 + 14, PCB_TOP + 1.5, 13.0, 8.5, "rect", "USB ESP32"),
-    ("right", 88.0, 22.0, 8.2, 8.2, "circle", "Jack DC 5.5×2.1 bắt ren M8"),
-    ("front", 75.0, 24.0, 12.6, 12.6, "circle", "Ốc siết cáp PG7 — đầu vào số"),
-    ("front", 95.0, 24.0, 12.6, 12.6, "circle", "Ốc siết cáp PG7 — đầu vào số"),
-    ("front", 130.0, 24.0, 12.6, 12.6, "circle", "Ốc siết cáp PG7 — cảm biến analog"),
+    ("left", MODULES["W5500"][1] + 14, _top("W5500") + 7.0, 17.0, 15.0, "rect", "RJ45"),
+    ("left", MODULES["RS232"][1] + 15, _top("RS232") + 6.0, 20.0, 12.0, "rect", "DB9"),
+    ("right", MODULES["ESP32"][1] + 14, _top("ESP32") + 1.5, 13.0, 8.5, "rect", "USB ESP32"),
+    ("right", 88.0, ZW, 8.2, 8.2, "circle", "Jack DC 5.5×2.1 bắt ren M8"),
+    ("front", 75.0, ZW, 12.6, 12.6, "circle", "Ốc siết cáp PG7 — đầu vào số"),
+    ("front", 95.0, ZW, 12.6, 12.6, "circle", "Ốc siết cáp PG7 — đầu vào số"),
+    ("front", 130.0, ZW, 12.6, 12.6, "circle", "Ốc siết cáp PG7 — cảm biến 4–20 mA"),
 ]
 DB9_SCREW = 12.5          # 2 lỗ vít DB9 cách tâm ±12,5 mm
-VENTS = dict(n=8, w=2.0, h=14.0, pitch=5.0, z=22.0)
+VENTS = dict(n=8, w=2.0, h=16.0, pitch=5.0, z=40.0)
 
 
 def box(x, y, z, sx, sy, sz):
@@ -97,14 +106,15 @@ def bx(x0, x1, y0, y1, z0, z1):
 
 def cradle(x, y, L, W, ledge):
     """Khay góc: gờ đỡ dưới PCB + vách chữ L ở 4 góc + mấu giữ 0,6 mm đè lên mặt PCB."""
-    c, t, s = 0.3, 1.6, 6.0      # khe hở, dày vách, độ dài mỗi nhánh chữ L
+    c, t, s = 0.3, 2.0, 7.0      # khe hở, dày vách, độ dài mỗi nhánh chữ L
     top = ledge + PCB_T + 1.4
     parts = []
     for cx, sx in ((x, -1), (x + L, 1)):
         for cy, sy in ((y, -1), (y + W, 1)):
-            parts.append(bx(cx, cx - 4 * sx, cy, cy - 4 * sy, 0, ledge))                       # gờ đỡ
             wx = cx + sx * c                                                                    # mặt trong vách
             wy = cy + sy * c
+            # gờ đỡ 3 × 3 dưới góc PCB, liền khối với vách chữ L cho cứng (tránh chạm hàng header)
+            parts.append(bx(cx - 3 * sx, wx + sx * t, cy - 3 * sy, wy + sy * t, 0, ledge))
             parts.append(bx(wx, wx + sx * t, cy - sy * s, wy + sy * t, 0, top))                # nhánh // trục y
             parts.append(bx(cx - sx * s, wx + sx * t, wy, wy + sy * t, 0, top))                # nhánh // trục x
             parts.append(bx(cx - sx * (s - 1), cx - sx * 1, wy, cy - sy * 0.6,                 # mấu giữ

@@ -27,7 +27,7 @@ SRC = {
 mods = [dict(name=k, x=x, y=y, L=L, W=W, z=z, desc=d, src=SRC.get(k, ""))
         for k, (x, y, L, W, z, d) in G.MODULES.items()]
 cuts = [dict(side=s, u=u, zc=zc, w=w, h=h, shape=sh, label=n) for s, u, zc, w, h, sh, n in G.CUTS]
-data = dict(IN_L=G.IN_L, IN_W=G.IN_W, IN_H=G.IN_H, WALL=G.WALL, FLOOR=G.FLOOR, PCB_T=G.PCB_T,
+data = dict(pins=G.PINS, IN_L=G.IN_L, IN_W=G.IN_W, IN_H=G.IN_H, WALL=G.WALL, FLOOR=G.FLOOR, PCB_T=G.PCB_T,
             mods=mods, cuts=cuts, oled=G.OLED)
 
 SIDE = {"left": "Vách trái", "right": "Vách phải", "front": "Mặt trước", "back": "Mặt sau"}
@@ -103,16 +103,25 @@ function Cy(g, x, y, z, r, h, m, seg = 24) {
   const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, seg), m);
   c.position.set(x, y + h / 2, z); g.add(c); return c;
 }
-// hàng header 2,54 mm: (x0,y0) là tâm chân đầu tiên, dir 'x' hoặc 'y'; chân cắm xuống dưới PCB
+// hàng header 2,54 mm: (x0,y0) là tâm chân đầu tiên, dir 'x' hoặc 'y'.
+// HEADER_DIR = 'down' (chân cắm xuống dưới PCB) hoặc 'up'; vẽ kèm đầu dupont cái 14 mm và đoạn dây
+let HEADER_DIR = 'down';
+const WIRE = [0xd64545, 0x22262b, 0xe0b500, 0x2f9e44, 0x2f6fd6, 0xe8e8e8, 0xe07b21, 0x8a4fd1];
 function header(g, x0, y0, n, dir, rows = 1) {
-  const p = 2.54, len = n * p;
+  const p = 2.54, len = n * p, up = HEADER_DIR === 'up';
+  const zPl = up ? T : -2.5;                       // đế nhựa header
+  const zTipLo = up ? 0 : -8.5, pinH = 8.5 + T + 0.6;
+  const zHo = up ? T + 2.5 : -2.5 - 14;            // đầu dupont 14 mm trượt tới sát đế nhựa
+  const zW = up ? T + 16.5 : -2.5 - 22;            // dây ra khỏi đầu dupont
   for (let r = 0; r < rows; r++) {
     const ox = dir === 'y' ? r * p : 0, oy = dir === 'x' ? r * p : 0;
-    if (dir === 'x') B(g, x0 - p / 2, y0 + oy - p / 2, -2.5, len, p, 2.5, BLACK());
-    else B(g, x0 + ox - p / 2, y0 - p / 2, -2.5, p, len, 2.5, BLACK());
+    if (dir === 'x') B(g, x0 - p / 2, y0 + oy - p / 2, zPl, len, p, 2.5, BLACK());
+    else B(g, x0 + ox - p / 2, y0 - p / 2, zPl, p, len, 2.5, BLACK());
     for (let i = 0; i < n; i++) {
       const px = x0 + ox + (dir === 'x' ? i * p : 0), py = y0 + oy + (dir === 'y' ? i * p : 0);
-      B(g, px - 0.32, py - 0.32, -8.5, 0.64, 0.64, 8.5 + T + 0.6, GOLD());
+      B(g, px - 0.32, py - 0.32, up ? 0 : zTipLo, 0.64, 0.64, pinH, GOLD());
+      B(g, px - 1.2, py - 1.2, zHo, 2.4, 2.4, 14, mat('dup', 0x15171a, { roughness: 0.5 }));
+      B(g, px - 0.6, py - 0.6, zW, 1.2, 1.2, 8, mat('w' + (i % 8), WIRE[i % 8]));
     }
   }
 }
@@ -222,8 +231,9 @@ const mods = new THREE.Group(); world.add(mods);
 const anchors = [];
 for (const m of D.mods) {
   const g = new THREE.Group(); g.position.set(m.x, m.y, m.z);
+  HEADER_DIR = D.pins[m.name] || 'down';
   (BUILD[m.name] || BUILD.HW685)(g, m.L, m.W); mods.add(g);
-  anchors.push({ obj: mods, p: new THREE.Vector3(m.x + m.L / 2, m.y + m.W / 2, m.z + 18), text: m.name, kind: 'mod' });
+  anchors.push({ obj: mods, p: new THREE.Vector3(m.x + m.L / 2, m.y + m.W / 2, m.z + (D.pins[m.name] === 'up' ? 30 : 16)), text: m.name, kind: 'mod' });
 }
 // OLED dưới nắp, mặt kính quay lên cửa sổ
 const o = D.oled;
@@ -231,7 +241,7 @@ const og = new THREE.Group(); og.position.set(o.x, o.y, -o.post_h - 4.1); lid.ad
 B(og, 0, 0, 0, o.L, o.W, T, PCB_BLUE());
 B(og, 0.15, 3.0, T, 26.7, 19.3, 1.5, BLACK());
 B(og, o.win_dx + 0.6, o.win_dy + 0.9, T + 1.51, 21.74, 11.2, 0.05, mat('scr', 0x0b2233, { emissive: 0x0a2c44 }));
-for (let i = 0; i < 4; i++) B(og, o.L / 2 - 3.81 + i * 2.54 - 0.32, o.W - 1.6, T, 0.64, 0.64, 3, GOLD());
+HEADER_DIR = 'down'; header(og, o.L / 2 - 3.81, o.W - 1.27, 4, 'x');
 
 // Phụ kiện gắn vách (toạ độ hộp)
 const acc = new THREE.Group(); world.add(acc);
@@ -378,7 +388,7 @@ code {{ font-family: var(--f-mono); font-size: 12.5px; }}
 <div class="wrap">
   <header>
     <h1>Vỏ hộp Smart PLC Gateway</h1>
-    <span class="tag">UET-BigHero · DENSO Factory Hacks 2026 · bản in 3D v0.2</span>
+    <span class="tag">UET-BigHero · DENSO Factory Hacks 2026 · bản in 3D v0.3</span>
   </header>
   <div class="stage">
     <canvas id="view" aria-label="Mô hình 3D vỏ hộp và module, kéo để xoay"></canvas>
