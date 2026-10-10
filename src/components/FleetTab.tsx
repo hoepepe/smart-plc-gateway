@@ -2,14 +2,25 @@ import React, { useMemo, useState } from 'react';
 import {
   Plus, Cpu, WifiOff, CheckCircle2, XCircle, Sparkles, RotateCcw, History, Settings2,
   AlertTriangle, Tag, GraduationCap, ShieldCheck, Activity, Trash2, Terminal,
+  Hammer, Wrench, Drill, Zap, Factory, Wind, type LucideIcon,
 } from 'lucide-react';
 import { Card, Note, Bar, Spark } from './charts';
 import type { Ack } from '../utils/mqtt';
 import {
-  EdgeState, LearnStatus, RecipeStatus, EdgeAlarm, MachineCfg, Mode, EdgeCycle,
-  MODE_META, ISSUE_VI, KIND_VI, STATUS_VI, machineMode, tsClock, tsDate, recipeLabel,
+  EdgeState, LearnStatus, RecipeStatus, EdgeAlarm, MachineCfg, Mode, EdgeCycle, Profile,
+  MODE_META, ISSUE_VI, KIND_VI, STATUS_VI, machineMode, tsClock, tsDate, recipeLabel, profileOf, low,
 } from '../utils/edge';
 import { AddMachineDialog } from './AddMachineDialog';
+
+const ICONS: Record<string, LucideIcon> = {
+  press: Hammer, torque: Wrench, cnc: Drill, weld: Zap, injection: Factory, air: Wind, generic: Cpu,
+};
+const TypeIcon = ({ p, size = 14, className = '' }: { p: Profile; size?: number; className?: string }) => {
+  const I = ICONS[p.icon] ?? Cpu;
+  return <I size={size} className={className} aria-hidden="true" />;
+};
+const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+const featName = (p: Profile, f: { feature: string; vi: string }) => p.features[f.feature] ?? f.vi;
 
 type Send = (op: string, body?: Record<string, unknown>) => Promise<Ack>;
 
@@ -59,16 +70,16 @@ export function FleetTab({ edge, connected, sample, send, notify }: Props) {
             </div>
           )}
           {machines.map((m) => (
-            <MachineCard key={m.id} cfg={m} st={edge.learn[m.id]} on={cur?.id === m.id} onClick={() => setSel(m.id)} />
+            <MachineCard key={m.id} cfg={m} p={profileOf(edge.registry, m)} st={edge.learn[m.id]} on={cur?.id === m.id} onClick={() => setSel(m.id)} />
           ))}
         </aside>
 
         {cur ? (
-          <MachineDetail key={cur.id} cfg={cur} st={edge.learn[cur.id]} cycles={edge.cycles[cur.id] ?? []} run={run} />
+          <MachineDetail key={cur.id} cfg={cur} p={profileOf(edge.registry, cur)} st={edge.learn[cur.id]} cycles={edge.cycles[cur.id] ?? []} run={run} />
         ) : <div />}
       </div>
       {adding && edge.registry && (
-        <AddMachineDialog templates={edge.registry.templates} existing={machines.map((m) => m.id)}
+        <AddMachineDialog templates={edge.registry.templates} profiles={edge.registry.profiles ?? {}} existing={machines.map((m) => m.id)}
           onClose={() => setAdding(false)}
           onSubmit={async (cfg) => {
             const a = await send('add_machine', { cfg });
@@ -119,7 +130,7 @@ function ModeChip({ mode, st }: { mode: Mode | null; st?: LearnStatus }) {
     </span>);
 }
 
-const MachineCard: React.FC<{ cfg: MachineCfg; st?: LearnStatus; on: boolean; onClick: () => void }> = ({ cfg, st, on, onClick }) => {
+const MachineCard: React.FC<{ cfg: MachineCfg; p: Profile; st?: LearnStatus; on: boolean; onClick: () => void }> = ({ cfg, p, st, on, onClick }) => {
   const mode = machineMode(st);
   const learning = st?.recipes.find((r) => r.mode === 'learning');
   return (
@@ -129,6 +140,9 @@ const MachineCard: React.FC<{ cfg: MachineCfg; st?: LearnStatus; on: boolean; on
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-slate-900 truncate">{cfg.name}</div>
+          <div className="text-[11px] text-slate-600 truncate inline-flex items-center gap-1 mt-0.5">
+            <TypeIcon p={p} size={12} className="text-slate-500 shrink-0" />{p.label}
+          </div>
           <div className="text-[11px] text-slate-500 font-mono truncate">
             {cfg.id} · {cfg.plc.driver === 'simulator' ? 'mô phỏng' : `${cfg.plc.ip}:${cfg.plc.port}`}
           </div>
@@ -139,12 +153,12 @@ const MachineCard: React.FC<{ cfg: MachineCfg; st?: LearnStatus; on: boolean; on
         )}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2"><ModeChip mode={mode} st={st} />
-        {st && st.recipes.length > 1 && <span className="text-[11px] text-slate-500">{st.recipes.length} mã hàng</span>}
+        {st && st.recipes.length > 1 && <span className="text-[11px] text-slate-500">{st.recipes.length} {low(p.recipe)}</span>}
       </div>
       {learning && (
         <div className="mt-2.5">
           <Bar value={learning.learned / learning.target} color="#0284c7" height={5} />
-          <div className="text-[11px] text-slate-500 mt-1 tabular-nums">{learning.learned}/{learning.target} chu kỳ</div>
+          <div className="text-[11px] text-slate-500 mt-1 tabular-nums">{learning.learned}/{learning.target} {p.cycle}</div>
         </div>
       )}
     </button>
@@ -155,7 +169,7 @@ const MachineCard: React.FC<{ cfg: MachineCfg; st?: LearnStatus; on: boolean; on
 type Run = (op: string, body: Record<string, unknown>, ok: string) => Promise<Ack | null>;
 type Base = Record<string, unknown>;
 
-const MachineDetail: React.FC<{ cfg: MachineCfg; st?: LearnStatus; cycles: EdgeCycle[]; run: Run }> = ({ cfg, st, cycles, run }) => {
+const MachineDetail: React.FC<{ cfg: MachineCfg; p: Profile; st?: LearnStatus; cycles: EdgeCycle[]; run: Run }> = ({ cfg, p, st, cycles, run }) => {
   const recipes = st?.recipes ?? [];
   const [rsel, setRsel] = useState<string | null>(null);
   const r = recipes.find((x) => x.recipe === rsel) ?? recipes.find((x) => x.mode === 'review') ?? recipes[recipes.length - 1];
@@ -171,11 +185,15 @@ const MachineDetail: React.FC<{ cfg: MachineCfg; st?: LearnStatus; cycles: EdgeC
               <h2 className="text-base font-semibold text-slate-900">{cfg.name}</h2>
               <ModeChip mode={r?.mode ?? null} st={st} />
             </div>
+            <p className="text-sm text-slate-700 mt-1 inline-flex items-center gap-1.5">
+              <TypeIcon p={p} size={15} className="text-slate-500" /> {p.label} · đo <b className="font-medium">{low(p.signal)}</b>
+              {p.unit ? ` (${p.unit})` : ''}
+            </p>
             <p className="text-xs text-slate-500 mt-1 font-mono">
               {cfg.id}{cfg.line ? ` · ${cfg.line}` : ''} · {cfg.plc.driver === 'simulator' ? 'máy mô phỏng'
-                : `Mitsubishi MC 3E · ${cfg.plc.ip}:${cfg.plc.port}`} · tín hiệu {cfg.signal.register} × {cfg.signal.scale}
-              {cfg.signal.unit ? ` ${cfg.signal.unit}` : ''} · trạng thái {cfg.state.register}
-              {cfg.recipe_register ? ` · mã hàng ${cfg.recipe_register}` : ''}
+                : `Mitsubishi MC 3E · ${cfg.plc.ip}:${cfg.plc.port} · ${low(p.signal)} ${cfg.signal.register} × ${cfg.signal.scale}${
+                  cfg.signal.unit ? ` ${cfg.signal.unit}` : ''} · trạng thái ${cfg.state.register}${
+                  cfg.recipe_register ? ` · ${low(p.recipe)} ${cfg.recipe_register}` : ''}`}
             </p>
             {st && <p className={`text-xs mt-1 ${st.conn.ok ? 'text-slate-500' : 'text-rose-700'}`}>{st.conn.msg}</p>}
           </div>
@@ -185,12 +203,12 @@ const MachineDetail: React.FC<{ cfg: MachineCfg; st?: LearnStatus; cycles: EdgeC
           </div>
         </div>
         {recipes.length > 1 && (
-          <div className="px-5 pb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Mã hàng">
+          <div className="px-5 pb-3 flex flex-wrap gap-1.5" role="tablist" aria-label={p.recipe}>
             {recipes.map((x) => (
               <button key={x.recipe} role="tab" aria-selected={x.recipe === r?.recipe} onClick={() => setRsel(x.recipe)}
                 className={`text-xs px-2.5 py-1 rounded border inline-flex items-center gap-1.5 ${
                   x.recipe === r?.recipe ? 'border-slate-900 text-slate-900 font-medium' : 'border-slate-200 text-slate-500 hover:text-slate-800'}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${MODE_META[x.mode].dot}`} /> Mã hàng {recipeLabel(x.recipe)}
+                <span className={`w-1.5 h-1.5 rounded-full ${MODE_META[x.mode].dot}`} /> {p.recipe} {recipeLabel(x.recipe)}
               </button>
             ))}
           </div>
@@ -199,17 +217,17 @@ const MachineDetail: React.FC<{ cfg: MachineCfg; st?: LearnStatus; cycles: EdgeC
       </Card>
 
       {!st || !r ? (
-        <Card><p className="text-sm text-slate-500">Đang chờ chu kỳ đầu tiên từ máy…</p></Card>
+        <Card><p className="text-sm text-slate-500">Đang chờ {p.cycle} đầu tiên từ máy…</p></Card>
       ) : (
         <>
-          {r.mode === 'learning' && <LearningPanel r={r} cycles={rc} />}
-          {r.mode === 'review' && r.pending && <ReviewPanel r={r} cycles={rc} base={base} run={run} />}
-          {r.mode === 'monitoring' && r.active && <MonitorPanel r={r} st={st} base={base} run={run} />}
-          <ScorePanel cycles={rc} mode={r.mode} />
-          <AlarmPanel st={st} recipe={r.recipe} base={base} run={run} />
+          {r.mode === 'learning' && <LearningPanel r={r} p={p} cycles={rc} />}
+          {r.mode === 'review' && r.pending && <ReviewPanel r={r} p={p} cycles={rc} base={base} run={run} />}
+          {r.mode === 'monitoring' && r.active && <MonitorPanel r={r} p={p} st={st} base={base} run={run} />}
+          <ScorePanel cycles={rc} p={p} mode={r.mode} />
+          <AlarmPanel st={st} p={p} recipe={r.recipe} base={base} run={run} />
           <div className="grid xl:grid-cols-2 gap-5">
             <VersionsPanel r={r} base={base} run={run} />
-            <SettingsPanel cfg={cfg} st={st} run={run} />
+            <SettingsPanel cfg={cfg} p={p} st={st} run={run} />
           </div>
         </>
       )}
@@ -256,18 +274,18 @@ function rate(cycles: EdgeCycle[]) {
   return dt > 0 ? dt : null;
 }
 
-function LearningPanel({ r, cycles }: { r: RecipeStatus; cycles: EdgeCycle[] }) {
+function LearningPanel({ r, p, cycles }: { r: RecipeStatus; p: Profile; cycles: EdgeCycle[] }) {
   const per = rate(cycles);
   const left = Math.max(0, r.target - r.learned);
   const eta = per ? left * per : null;
   return (
-    <Card title={<span className="inline-flex items-center gap-2"><GraduationCap size={16} /> Đang học chuẩn bình thường của máy</span>}
-      sub="Chưa bật cảnh báo AI trong lúc học. Chu kỳ máy tự báo lỗi và chu kỳ lỗi tín hiệu bị loại khỏi dữ liệu học.">
+    <Card title={<span className="inline-flex items-center gap-2"><GraduationCap size={16} /> Đang học {low(p.signal)} bình thường của máy</span>}
+      sub={`Chưa bật cảnh báo AI trong lúc học. ${cap(p.cycle)} máy tự báo lỗi và ${p.cycle} lỗi tín hiệu bị loại khỏi dữ liệu học.`}>
       <div className="space-y-4">
         <div>
           <div className="flex items-baseline justify-between text-sm mb-1.5">
-            <span className="font-medium text-slate-900 tabular-nums">{r.learned} / {r.target} chu kỳ</span>
-            <span className="text-xs text-slate-500">{eta != null ? `còn khoảng ${fmtDur(eta)}` : 'đang đo tốc độ chu kỳ…'}</span>
+            <span className="font-medium text-slate-900 tabular-nums">{r.learned} / {r.target} {p.cycle}</span>
+            <span className="text-xs text-slate-500">{eta != null ? `còn khoảng ${fmtDur(eta)}` : `đang đo nhịp ${p.cycle}…`}</span>
           </div>
           <Bar value={r.learned / r.target} color="#0284c7" height={10} />
         </div>
@@ -277,7 +295,8 @@ function LearningPanel({ r, cycles }: { r: RecipeStatus; cycles: EdgeCycle[] }) 
           <Stat label="Bỏ qua · lỗi tín hiệu" value={r.excluded_dq} />
         </div>
         <Note>Nên để máy chạy qua ít nhất 2 ca hoặc 2 lô phôi khi học, để chuẩn bình thường bao được biến động giữa các ca.
-          Nếu lúc học máy ra vài chu kỳ lỗi mà không ai biết, bước huấn luyện tự lọc bỏ các chu kỳ lệch xa trước khi học.</Note>
+          Nếu lúc học máy ra vài {p.cycle} lỗi mà không ai biết, bước huấn luyện tự lọc bỏ các {p.cycle} lệch xa trước khi học.
+          {r.recipe !== '*' && <> Mỗi {low(p.recipe)} có chuẩn riêng — {low(p.recipe)} mới chạy lần đầu sẽ tự vào chế độ học.</>}</Note>
       </div>
     </Card>
   );
@@ -289,19 +308,19 @@ function fmtDur(s: number) {
   return `${(s / 3600).toFixed(1)} giờ`;
 }
 
-function ModelFacts({ m }: { m: NonNullable<RecipeStatus['active']> }) {
+function ModelFacts({ m, p }: { m: NonNullable<RecipeStatus['active']>; p: Profile }) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-      <Stat label="Chu kỳ học" value={m.n_train} hint={m.n_dropped ? `tự bỏ ${m.n_dropped} chu kỳ nghi lỗi` : 'không có chu kỳ nghi lỗi'} />
+      <Stat label={`${cap(p.cycle)} đã học`} value={m.n_train} hint={m.n_dropped ? `tự bỏ ${m.n_dropped} ${p.cycle} nghi lỗi` : `không có ${p.cycle} nghi lỗi`} />
       <Stat label="Báo nhầm ước tính" value={m.calib_false_alarm != null ? `${(m.calib_false_alarm * 100).toFixed(1)}%` : '—'}
         hint="kiểm định chéo theo khối thời gian" />
-      <Stat label="Chu kỳ trung vị" value={m.duration_med ? `${m.duration_med.toFixed(2)} s` : '—'} />
+      <Stat label={`Thời gian ${p.cycle} (trung vị)`} value={m.duration_med ? `${m.duration_med.toFixed(2)} s` : '—'} />
       <Stat label="Phiên bản" value={`v${m.version}`} hint={KIND_VI[m.kind] ?? m.kind} />
     </div>
   );
 }
 
-function ReviewPanel({ r, cycles, base, run }: { r: RecipeStatus; cycles: EdgeCycle[]; base: Base; run: Run }) {
+function ReviewPanel({ r, p, cycles, base, run }: { r: RecipeStatus; p: Profile; cycles: EdgeCycle[]; base: Base; run: Run }) {
   const m = r.pending!;
   const prev = cycles.filter((c) => c.kind === 'preview');
   const would = prev.filter((c) => c.flag).length;
@@ -309,10 +328,10 @@ function ReviewPanel({ r, cycles, base, run }: { r: RecipeStatus; cycles: EdgeCy
     <Card title={<span className="inline-flex items-center gap-2"><ShieldCheck size={16} /> Đã học xong — chờ kỹ sư duyệt</span>}
       sub={m.note}>
       <div className="space-y-4">
-        <ModelFacts m={m} />
+        <ModelFacts m={m} p={p} />
         <Note tone="amber">
           {prev.length ? (<>
-            Chạy thử chuẩn mới trên {prev.length} chu kỳ gần nhất: <b>{would}</b> chu kỳ sẽ bị cảnh báo
+            Chạy thử chuẩn mới trên {prev.length} {p.cycle} gần nhất: <b>{would}</b> {p.cycle} sẽ bị cảnh báo
             ({((would / prev.length) * 100).toFixed(1)}%). Nếu con số này cao trong khi máy đang chạy bình thường,
             hãy để máy học lại lâu hơn.</>
           ) : 'Chưa có chu kỳ nào của mã hàng này kể từ khi học xong. Khi máy chạy lại mã hàng này, trang sẽ chấm thử bằng chuẩn mới để kỹ sư xem trước khi duyệt.'}
@@ -332,7 +351,7 @@ function ReviewPanel({ r, cycles, base, run }: { r: RecipeStatus; cycles: EdgeCy
   );
 }
 
-function MonitorPanel({ r, st, base, run }: { r: RecipeStatus; st: LearnStatus; base: Base; run: Run }) {
+function MonitorPanel({ r, p: prof, st, base, run }: { r: RecipeStatus; p: Profile; st: LearnStatus; base: Base; run: Run }) {
   const a = r.active!;
   const p = r.pending;
   return (
@@ -343,10 +362,10 @@ function MonitorPanel({ r, st, base, run }: { r: RecipeStatus; st: LearnStatus; 
         <Sparkles size={13} /> Học lại ngay</button>}>
       <div className="space-y-4">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <Stat label="Chu kỳ giám sát" value={r.monitored} />
-          <Stat label="Bị cảnh báo" value={r.flagged} hint={r.monitored ? `${((r.flagged / r.monitored) * 100).toFixed(1)}% số chu kỳ` : undefined} />
+          <Stat label={`${cap(prof.cycle)} đã giám sát`} value={r.monitored} />
+          <Stat label="Bị cảnh báo" value={r.flagged} hint={r.monitored ? `${((r.flagged / r.monitored) * 100).toFixed(1)}% số ${prof.cycle}` : undefined} />
           <Stat label="Chưa xử lý" value={st.open_alarms} />
-          <Stat label="Học lại định kỳ" value={`${r.since_retrain}/${r.retrain_every}`} hint="chu kỳ tới lần tạo bản mới" />
+          <Stat label="Học lại định kỳ" value={`${r.since_retrain}/${r.retrain_every}`} hint={`${prof.cycle} tới lần tạo bản mới`} />
         </div>
         {p && (
           <div className={`border rounded-md px-4 py-3 ${p.warn ? 'bg-rose-50 border-rose-200' : 'bg-amber-50 border-amber-200'}`}>
@@ -366,14 +385,14 @@ function MonitorPanel({ r, st, base, run }: { r: RecipeStatus; st: LearnStatus; 
             </div>
           </div>
         )}
-        <ModelFacts m={a} />
+        <ModelFacts m={a} p={prof} />
       </div>
     </Card>
   );
 }
 
 /* ───────────────────────── biểu đồ điểm theo thời gian ───────────────────────── */
-function ScorePanel({ cycles, mode }: { cycles: EdgeCycle[]; mode: Mode }) {
+function ScorePanel({ cycles, p, mode }: { cycles: EdgeCycle[]; p: Profile; mode: Mode }) {
   const pts = cycles.filter((c) => c.norm != null || c.kind === 'dq').slice(-160);
   const W = 640, H = 170, P = { l: 34, r: 10, t: 10, b: 22 };
   const top = Math.min(4, Math.max(2, ...pts.map((c) => c.norm ?? 0)) * 1.08);
@@ -408,22 +427,22 @@ function ScorePanel({ cycles, mode }: { cycles: EdgeCycle[]; mode: Mode }) {
               : <circle key={i} cx={x(i)} cy={y(c.norm!)} r={c.flag ? 3.4 : 2}
                 fill={c.kind === 'preview' ? 'none' : c.flag ? '#e11d48' : '#64748b'}
                 stroke={c.kind === 'preview' ? (c.flag ? '#e11d48' : '#64748b') : 'none'} strokeWidth="1" />)}
-            {!pts.length && <text x={W / 2} y={y(top * 0.62)} textAnchor="middle" fontSize="12" fill="#94a3b8">Chưa có chu kỳ được chấm điểm</text>}
+            {!pts.length && <text x={W / 2} y={y(top * 0.62)} textAnchor="middle" fontSize="12" fill="#94a3b8">Chưa có {p.cycle} được chấm điểm</text>}
           </svg>
           <div className="flex flex-wrap gap-4 text-[11px] text-slate-500 mt-1">
-            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-500" /> chu kỳ</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-500" /> {p.cycle}</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-600" /> bị cảnh báo</span>
             <span className="inline-flex items-center gap-1"><span className="w-3 h-0.5 bg-sky-600" /> trung bình trượt</span>
             {dqN > 0 && <span>× lỗi tín hiệu ({dqN})</span>}
           </div>
         </div>
         <div className="space-y-2">
-          <div className="text-[11px] uppercase tracking-wider text-slate-500">Chu kỳ vừa đọc</div>
+          <div className="text-[11px] uppercase tracking-wider text-slate-500">{cap(p.cycle)} vừa đọc · {low(p.signal)}{p.unit ? ` (${p.unit})` : ''}</div>
           <div className="border border-slate-200 rounded-md p-2 bg-slate-50">{last ? <Spark y={last.y} anomalous={!!last.flag} /> : <div className="h-8" />}</div>
           {lastAlarm?.top && (
             <div className="text-xs text-slate-600 leading-relaxed">
               <div className="font-medium text-slate-800 mb-0.5">Cảnh báo gần nhất lệch ở:</div>
-              {lastAlarm.top.map((t) => <div key={t.feature}>{t.vi} <span className="text-slate-400 tabular-nums">({t.z.toFixed(1)}× độ lệch thường)</span></div>)}
+              {lastAlarm.top.map((t) => <div key={t.feature}>{featName(p, t)} <span className="text-slate-400 tabular-nums">({t.z.toFixed(1)}× độ lệch thường)</span></div>)}
             </div>
           )}
         </div>
@@ -440,18 +459,19 @@ const ALARM_STATUS: Record<EdgeAlarm['status'], { label: string; cls: string }> 
   new_normal: { label: 'Bình thường mới', cls: 'bg-sky-50 text-sky-800 border-sky-200' },
 };
 
-function AlarmPanel({ st, recipe, base, run }: { st: LearnStatus; recipe: string; base: Base; run: Run }) {
+function AlarmPanel({ st, p, recipe, base, run }: { st: LearnStatus; p: Profile; recipe: string; base: Base; run: Run }) {
   const [more, setMore] = useState(false);
   const all = st.alarms.filter((a) => a.recipe === recipe);
   const list = more ? all : all.slice(0, 6);
-  const known = Object.keys(st.classifier.types);
+  const known = [...new Set([...Object.keys(st.classifier.types), ...p.faults])];
   const c = st.classifier;
   return (
     <Card title="Cảnh báo và phản hồi"
       sub="Mỗi lần bấm là một nhãn: AI dùng nhãn để học lại (báo nhầm, bình thường mới) và để học phân loại loại lỗi (đúng là lỗi)."
       right={<span className={`text-[11px] px-2 py-1 rounded border shrink-0 inline-flex items-center gap-1 ${c.ready ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
-        title="Tầng phân loại loại lỗi bật khi đủ nhãn">
+        title={`Bật khi đủ nhãn. Nhãn lỗi dùng chung giữa các máy cùng loại (${low(p.label)}).`}>
         <Tag size={12} /> Phân loại lỗi: {c.ready ? `đang dùng (${Object.keys(c.types).length} loại)` : `${c.n}/${c.need_total} nhãn`}
+        {(c.shared_machines ?? 0) > 1 ? ` · chung ${c.shared_machines} máy` : c.n > 0 && c.own === 0 ? ' · từ máy cùng loại' : ''}
       </span>}>
       {all.length > 6 && (
         <div className="-mt-1 mb-3 text-xs text-slate-500">
@@ -460,10 +480,10 @@ function AlarmPanel({ st, recipe, base, run }: { st: LearnStatus; recipe: string
         </div>
       )}
       {list.length === 0 ? (
-        <p className="text-sm text-slate-500">Chưa có cảnh báo nào cho mã hàng này.</p>
+        <p className="text-sm text-slate-500">Chưa có cảnh báo nào{recipe !== '*' ? ` cho ${low(p.recipe)} ${recipe}` : ''}.</p>
       ) : (
         <ul className="divide-y divide-slate-100 -my-2">
-          {list.map((a) => <AlarmRow key={a.id} a={a} known={known} base={base} run={run} />)}
+          {list.map((a) => <AlarmRow key={a.id} a={a} p={p} known={known} base={base} run={run} />)}
         </ul>
       )}
       {all.length > 6 && (
@@ -475,7 +495,7 @@ function AlarmPanel({ st, recipe, base, run }: { st: LearnStatus; recipe: string
   );
 }
 
-const AlarmRow: React.FC<{ a: EdgeAlarm; known: string[]; base: Base; run: Run }> = ({ a, known, base, run }) => {
+const AlarmRow: React.FC<{ a: EdgeAlarm; p: Profile; known: string[]; base: Base; run: Run }> = ({ a, p, known, base, run }) => {
   const [askType, setAskType] = useState(false);
   const [ft, setFt] = useState(a.suggestion?.type ?? '');
   const [all, setAll] = useState(false);
@@ -496,7 +516,7 @@ const AlarmRow: React.FC<{ a: EdgeAlarm; known: string[]; base: Base; run: Run }
           )}
         </div>
         <div className="text-xs text-slate-600 mt-1">
-          Lệch nhiều nhất: {a.top.map((t) => `${t.vi} (${t.z.toFixed(1)}×)`).join(' · ')}
+          Lệch nhiều nhất: {a.top.map((t) => `${featName(p, t)} (${t.z.toFixed(1)}×)`).join(' · ')}
         </div>
       </div>
       {a.status === 'open' && (
@@ -508,13 +528,21 @@ const AlarmRow: React.FC<{ a: EdgeAlarm; known: string[]; base: Base; run: Run }
               <button onClick={() => send('new_normal')} className="text-xs border border-sky-300 text-sky-800 rounded px-2.5 py-1.5 hover:bg-sky-50">Bình thường mới</button>
             </div>
           ) : (
-            <form className="flex flex-wrap gap-1.5" onSubmit={(e) => { e.preventDefault(); send('fault', { fault_type: ft }); setAskType(false); }}>
+            <form className="flex flex-wrap gap-1.5 sm:justify-end max-w-sm" onSubmit={(e) => { e.preventDefault(); if (!ft.trim()) return; send('fault', { fault_type: ft.trim() }); setAskType(false); }}>
               <label className="sr-only" htmlFor={`in-${a.id}`}>Loại lỗi</label>
               <input id={`in-${a.id}`} list={listId} value={ft} onChange={(e) => setFt(e.target.value)} autoFocus
-                placeholder="Loại lỗi, vd. Thiếu phôi" className="text-xs border border-slate-300 rounded px-2 py-1.5 w-44" />
+                placeholder={`Loại lỗi, vd. ${p.faults[0] ?? 'Thiếu phôi'}`} className="text-xs border border-slate-300 rounded px-2 py-1.5 w-44" />
               <datalist id={listId}>{known.map((k) => <option key={k} value={k} />)}</datalist>
               <button type="submit" className="text-xs font-medium bg-slate-900 text-white rounded px-2.5 py-1.5">Lưu</button>
               <button type="button" onClick={() => setAskType(false)} className="text-xs text-slate-500 px-1">Huỷ</button>
+              {known.length > 0 && (
+                <div className="basis-full flex flex-wrap gap-1 sm:justify-end">
+                  {known.slice(0, 6).map((k) => (
+                    <button key={k} type="button" onClick={() => setFt(k)}
+                      className={`text-[11px] rounded border px-1.5 py-0.5 ${ft === k ? 'border-slate-900 text-slate-900' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}>{k}</button>
+                  ))}
+                </div>
+              )}
             </form>
           )}
           <label className="text-[11px] text-slate-500 inline-flex items-center gap-1.5">
@@ -561,7 +589,7 @@ function VersionsPanel({ r, base, run }: { r: RecipeStatus; base: Base; run: Run
 }
 
 /* ───────────────────────── cài đặt AI của máy ───────────────────────── */
-function SettingsPanel({ cfg, st, run }: { cfg: MachineCfg; st: LearnStatus; run: Run }) {
+function SettingsPanel({ cfg, p, st, run }: { cfg: MachineCfg; p: Profile; st: LearnStatus; run: Run }) {
   const [lt, setLt] = useState(String(st.ai.learn_target));
   const [re, setRe] = useState(String(st.ai.retrain_every));
   const [auto, setAuto] = useState(!!st.ai.auto_approve);
@@ -575,12 +603,12 @@ function SettingsPanel({ cfg, st, run }: { cfg: MachineCfg; st: LearnStatus; run
       }}>
         <div className="grid grid-cols-2 gap-3">
           <label className="block" htmlFor={`lt-${id}`}>
-            <span className="text-xs text-slate-600">Số chu kỳ cần học</span>
+            <span className="text-xs text-slate-600">Số {p.cycle} cần học</span>
             <input id={`lt-${id}`} type="number" min={30} value={lt} onChange={(e) => setLt(e.target.value)}
               className="mt-1 w-full border border-slate-300 rounded px-2 py-1.5 tabular-nums" />
           </label>
           <label className="block" htmlFor={`re-${id}`}>
-            <span className="text-xs text-slate-600">Học lại sau mỗi (chu kỳ)</span>
+            <span className="text-xs text-slate-600">Học lại sau mỗi ({p.cycle})</span>
             <input id={`re-${id}`} type="number" min={50} value={re} onChange={(e) => setRe(e.target.value)}
               className="mt-1 w-full border border-slate-300 rounded px-2 py-1.5 tabular-nums" />
           </label>

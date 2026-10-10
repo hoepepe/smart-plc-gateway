@@ -32,15 +32,23 @@ export interface EdgeAlarm {
 
 export interface LearnStatus {
   machine: string; recipes: RecipeStatus[]; open_alarms: number;
-  classifier: { n: number; types: Record<string, number>; need_total: number; need_per_type: number; ready: boolean };
+  classifier: {
+    n: number; types: Record<string, number>; need_total: number; need_per_type: number; ready: boolean;
+    machine_type?: string; shared_machines?: number; own?: number;
+  };
   last_dq: { ts: number; issues: string[] } | null;
   ai: { learn_target: number; retrain_every: number; auto_approve: boolean; [k: string]: unknown };
   conn: { ok: boolean; msg: string; ts?: number }; state: string | null;
   cycles_seen: number; ts: number; alarms: EdgeAlarm[];
 }
 
+export interface Profile {
+  label: string; icon: string; signal: string; unit: string; cycle: string; recipe: string;
+  features: Record<string, string>; faults: string[]; sim: boolean;
+}
+
 export interface MachineCfg {
-  id: string; name: string; line: string; process: string;
+  id: string; name: string; line: string; process: string; machine_type?: string;
   plc: { driver: 'mitsubishi_mc' | 'simulator'; ip: string; port: number; plctype?: string };
   signal: { register: string; scale: number; unit: string; min: number | null; max: number | null };
   state: { register: string; bits: Record<string, number> };
@@ -51,7 +59,22 @@ export interface MachineCfg {
   simulator?: Record<string, unknown>;
 }
 
-export interface Registry { machines: MachineCfg[]; templates: Record<string, { label: string; cfg: MachineCfg }>; ts?: number }
+export interface Template { label: string; machine_type?: string; driver?: string; cfg: MachineCfg }
+
+export interface Registry {
+  machines: MachineCfg[]; templates: Record<string, Template>; profiles?: Record<string, Profile>; ts?: number;
+}
+
+const GENERIC: Profile = {
+  label: 'Máy khác', icon: 'generic', signal: 'Tín hiệu quá trình', unit: '', cycle: 'chu kỳ', recipe: 'Mã hàng',
+  features: {}, faults: [], sim: false,
+};
+
+/** Hồ sơ loại máy: dashboard đổi tên tín hiệu, đơn vị, cách gọi chu kỳ, mã hàng, đặc trưng, gợi ý lỗi theo loại máy. */
+export function profileOf(reg: Registry | null, cfg?: MachineCfg): Profile {
+  const p = (cfg?.machine_type && reg?.profiles?.[cfg.machine_type]) || GENERIC;
+  return { ...p, unit: cfg?.signal.unit || p.unit };
+}
 
 export interface EdgeCycle {
   ts: number; kind: string; mode?: Mode; recipe: string; norm?: number; flag?: boolean;
@@ -118,3 +141,6 @@ export const KIND_VI: Record<string, string> = {
 export const STATUS_VI: Record<VersionRow['status'], string> = {
   pending: 'Chờ duyệt', active: 'Đang chạy', retired: 'Đã thay', rejected: 'Bỏ qua',
 };
+
+/** Viết thường chữ đầu nhưng giữ chữ viết tắt: "Chương trình NC" → "chương trình NC". */
+export const low = (t: string) => t.charAt(0).toLowerCase() + t.slice(1);

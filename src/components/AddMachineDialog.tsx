@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type { Ack } from '../utils/mqtt';
-import type { MachineCfg } from '../utils/edge';
+import { low, type MachineCfg, type Profile, type Template } from '../utils/edge';
 
 interface Props {
-  templates: Record<string, { label: string; cfg: MachineCfg }>;
+  templates: Record<string, Template>;
+  profiles: Record<string, Profile>;
   existing: string[];
   onClose: () => void;
   onSubmit: (cfg: Record<string, unknown>) => Promise<Ack>;
@@ -23,10 +24,14 @@ function nextId(existing: string[]) {
 }
 
 /** Form khai báo máy mới. Chọn mẫu → sửa vài ô → gửi. Runtime kiểm tra lại và trả lỗi bằng tiếng Việt. */
-export function AddMachineDialog({ templates, existing, onClose, onSubmit }: Props) {
+export function AddMachineDialog({ templates, profiles, existing, onClose, onSubmit }: Props) {
   const keys = Object.keys(templates);
-  const [tpl, setTpl] = useState(keys[0]);
-  const [f, setF] = useState<MachineCfg>(() => ({ ...templates[keys[0]].cfg, id: nextId(existing), name: '' }));
+  // Loại máy lấy từ các mẫu runtime gửi lên; mỗi loại có mẫu PLC Mitsubishi và (nếu có) mẫu mô phỏng
+  const types = useMemo(() => [...new Set(keys.map((k) => templates[k].machine_type).filter(Boolean))] as string[], [templates]);
+  const keyOf = (t: string, sim: boolean) => keys.find((k) => templates[k].machine_type === t && (templates[k].driver === 'simulator') === sim);
+  const firstKey = keyOf(types[0] ?? '', false) ?? keys[0];
+  const [tpl, setTpl] = useState(firstKey);
+  const [f, setF] = useState<MachineCfg>(() => ({ ...templates[firstKey].cfg, id: nextId(existing), name: '' }));
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const first = useRef<HTMLSelectElement>(null);
@@ -43,6 +48,9 @@ export function AddMachineDialog({ templates, existing, onClose, onSubmit }: Pro
     setF((cur) => ({ ...templates[k].cfg, id: cur.id, name: cur.name, line: cur.line }));
   };
   const sim = f.plc.driver === 'simulator';
+  const mtype = templates[tpl]?.machine_type ?? '';
+  const prof = profiles[mtype];
+  const canSim = !!keyOf(mtype, true);
   const set = (path: string, v: unknown) => setF((cur) => {
     const n: any = structuredClone(cur);
     const ks = path.split('.');
@@ -76,16 +84,43 @@ export function AddMachineDialog({ templates, existing, onClose, onSubmit }: Pro
         </header>
 
         <div className="px-5 py-4 space-y-5">
-          <label className={lab} htmlFor="tpl">Mẫu
-            <select id="tpl" ref={first} value={tpl} onChange={(e) => pick(e.target.value)} className={inp}>
-              {keys.map((k) => <option key={k} value={k}>{templates[k].label}</option>)}
-            </select>
-          </label>
+          {types.length ? (
+            <div className="grid sm:grid-cols-2 gap-3">
+              <label className={lab} htmlFor="mtype">Loại máy
+                <select id="mtype" ref={first} value={mtype} className={inp}
+                  onChange={(e) => pick(keyOf(e.target.value, sim) ?? keyOf(e.target.value, false)!)}>
+                  {types.map((t) => <option key={t} value={t}>{profiles[t]?.label ?? t}</option>)}
+                </select>
+              </label>
+              <label className={lab} htmlFor="drv">Nguồn dữ liệu
+                <select id="drv" value={sim ? 'sim' : 'plc'} className={inp}
+                  onChange={(e) => pick(keyOf(mtype, e.target.value === 'sim') ?? tpl)}>
+                  <option value="plc">PLC Mitsubishi Q/L · MC protocol 3E</option>
+                  <option value="sim" disabled={!canSim}>Mô phỏng (không cần PLC){canSim ? '' : ' · chưa có cho loại này'}</option>
+                  <option value="omron" disabled>Omron FINS · đang làm</option>
+                  <option value="keyence" disabled>Keyence KV · đang làm</option>
+                </select>
+              </label>
+              {prof && (
+                <p className="sm:col-span-2 text-[11px] text-slate-500 leading-relaxed">
+                  Dashboard sẽ gọi tín hiệu là <b>{low(prof.signal)}</b>{prof.unit ? ` (${prof.unit})` : ''}, mỗi chu kỳ là
+                  một <b>{prof.cycle}</b>, mã hàng là <b>{low(prof.recipe)}</b>
+                  {prof.faults.length ? <>, gợi ý loại lỗi: {prof.faults.join(', ')}</> : ''}. Thuật toán AI giống nhau cho mọi loại máy.
+                </p>
+              )}
+            </div>
+          ) : (
+            <label className={lab} htmlFor="tpl">Mẫu
+              <select id="tpl" ref={first as React.Ref<HTMLSelectElement>} value={tpl} onChange={(e) => pick(e.target.value)} className={inp}>
+                {keys.map((k) => <option key={k} value={k}>{templates[k].label}</option>)}
+              </select>
+            </label>
+          )}
 
           <fieldset className="grid sm:grid-cols-3 gap-3">
             <legend className="text-[11px] uppercase tracking-wider text-slate-500 mb-1">Máy</legend>
             <label className={lab} htmlFor="mid">Mã máy<input id="mid" required value={f.id} onChange={(e) => set('id', e.target.value.toUpperCase())} className={`${inp} font-mono`} /></label>
-            <label className={`${lab} sm:col-span-2`} htmlFor="mname">Tên<input id="mname" value={f.name} placeholder="vd. Máy ép vòng bi số 3" onChange={(e) => set('name', e.target.value)} className={inp} /></label>
+            <label className={`${lab} sm:col-span-2`} htmlFor="mname">Tên<input id="mname" value={f.name} placeholder={`vd. ${prof?.label ?? 'Máy'} số 3`} onChange={(e) => set('name', e.target.value)} className={inp} /></label>
             <label className={lab} htmlFor="mline">Chuyền<input id="mline" value={f.line ?? ''} placeholder="vd. Line 2" onChange={(e) => set('line', e.target.value)} className={inp} /></label>
           </fieldset>
 
@@ -105,7 +140,7 @@ export function AddMachineDialog({ templates, existing, onClose, onSubmit }: Pro
 
           <fieldset className="grid sm:grid-cols-4 gap-3">
             <legend className="text-[11px] uppercase tracking-wider text-slate-500 mb-1">Tín hiệu quá trình</legend>
-            {!sim && <label className={lab} htmlFor="reg">Thanh ghi<input id="reg" value={f.signal.register} onChange={(e) => set('signal.register', e.target.value.toUpperCase())} className={`${inp} font-mono`} /></label>}
+            {!sim && <label className={lab} htmlFor="reg">Thanh ghi {prof ? low(prof.signal) : ''}<input id="reg" value={f.signal.register} onChange={(e) => set('signal.register', e.target.value.toUpperCase())} className={`${inp} font-mono`} /></label>}
             {!sim && <label className={lab} htmlFor="scale">Hệ số<input id="scale" type="number" step="any" value={f.signal.scale} onChange={(e) => set('signal.scale', Number(e.target.value))} className={`${inp} font-mono`} /></label>}
             <label className={lab} htmlFor="unit">Đơn vị<input id="unit" value={f.signal.unit ?? ''} onChange={(e) => set('signal.unit', e.target.value)} className={inp} /></label>
             <label className={lab} htmlFor="vmax">Giới hạn trên<input id="vmax" type="number" step="any" value={f.signal.max ?? ''} placeholder="không"
@@ -119,7 +154,7 @@ export function AddMachineDialog({ templates, existing, onClose, onSubmit }: Pro
                 <label className={lab} htmlFor="sreg">Word trạng thái<input id="sreg" value={f.state.register} onChange={(e) => set('state.register', e.target.value.toUpperCase())} className={`${inp} font-mono`} /></label>
                 <label className={lab} htmlFor="ereg">Thanh ghi mã lỗi<input id="ereg" value={f.error_register ?? ''} placeholder="không"
                   onChange={(e) => set('error_register', e.target.value.toUpperCase() || null)} className={`${inp} font-mono`} /></label>
-                <label className={lab} htmlFor="rreg">Thanh ghi mã hàng<input id="rreg" value={f.recipe_register ?? ''} placeholder="không"
+                <label className={lab} htmlFor="rreg">Thanh ghi {low(prof?.recipe ?? 'mã hàng')}<input id="rreg" value={f.recipe_register ?? ''} placeholder="không"
                   onChange={(e) => set('recipe_register', e.target.value.toUpperCase() || null)} className={`${inp} font-mono`} /></label>
                 <label className={lab} htmlFor="seg">Cắt chu kỳ
                   <select id="seg" value={f.segment.mode} onChange={(e) => set('segment.mode', e.target.value)} className={inp}>
@@ -136,7 +171,7 @@ export function AddMachineDialog({ templates, existing, onClose, onSubmit }: Pro
                   </label>
                 ))}
               </div>
-              <p className="text-[11px] text-slate-500">Số thứ tự bit trong word trạng thái (0–15). Có mã hàng thì mỗi mã hàng tự học một chuẩn riêng.</p>
+              <p className="text-[11px] text-slate-500">Số thứ tự bit trong word trạng thái (0–15). Có thanh ghi {low(prof?.recipe ?? 'mã hàng')} thì mỗi {low(prof?.recipe ?? 'mã hàng')} tự học một chuẩn riêng.</p>
             </fieldset>
           )}
 

@@ -29,6 +29,7 @@ import paho.mqtt.client as mqtt
 from . import detector as DT
 from . import quality
 from .config import TEMPLATES, from_template, normalize, templates_public
+from . import profiles
 from .learner import Brain
 from .sources import make_source
 from .store import Store
@@ -165,7 +166,7 @@ class Runtime:
 
     def publish_registry(self):
         self.pub("registry", {"machines": list(self.store.machines().values()), "templates": templates_public(),
-                              "ts": int(time.time() * 1000)}, retain=True)
+                              "profiles": profiles.public(), "ts": int(time.time() * 1000)}, retain=True)
 
     # ── máy ──
     def start_machine(self, cfg):
@@ -213,6 +214,12 @@ class Runtime:
             res = {"version": b.retrain_now(recipe)}
         elif op == "feedback":
             res = b.feedback(cmd["alarm_id"], cmd["label"], cmd.get("fault_type"), bool(cmd.get("all_open")))
+            if cmd["label"] == "fault":          # nhãn lỗi dùng chung cho mọi máy cùng loại
+                with self.wlock:
+                    peers = [o for k, o in self.workers.items() if k != mid and o.brain.machine_type == b.machine_type]
+                for o in peers:
+                    o.brain._fit_classifier()
+                    o.publish_status(force=True)
         elif op == "set_ai":
             cfg = dict(w.cfg)
             cfg["ai"] = {**cfg.get("ai", {}), **(cmd.get("ai") or {})}
@@ -242,9 +249,12 @@ def main():
     ap.add_argument("--port", type=int, default=int(os.getenv("MQTT_PORT", "1883")))
     ap.add_argument("--gw", default=os.getenv("GW_ID", "01"))
     ap.add_argument("--data", default=os.getenv("EDGE_DATA", DATA), help="thư mục lưu edge.db")
-    ap.add_argument("--demo", action="store_true", help="tạo 3 máy mô phỏng nếu chưa có máy nào")
+    ap.add_argument("--demo", action="store_true", help="tạo 4 máy mô phỏng nếu chưa có máy nào")
     ap.add_argument("--fresh", action="store_true", help="xoá dữ liệu cũ (edge.db) trước khi chạy")
-    ap.add_argument("--add-plc", metavar="IP:PORT", help="khai báo nhanh 1 PLC Mitsubishi thật (máy ép, D100/M0/D110)")
+    ap.add_argument("--add-plc", metavar="IP:PORT", help="khai báo nhanh 1 PLC Mitsubishi thật (M0 trạng thái, D110 mã lỗi)")
+    ap.add_argument("--type", default="press", choices=list(profiles.PROFILES),
+                    help="loại máy của PLC trong --add-plc (đổi tên tín hiệu, đơn vị, gợi ý lỗi trên dashboard)")
+    ap.add_argument("--signal", default=None, help="thanh ghi tín hiệu cho --add-plc, mặc định theo loại máy (máy ép: D100)")
     a = ap.parse_args()
 
     if a.fresh:
@@ -257,13 +267,17 @@ def main():
                               ai={"learn_target": 160, "retrain_every": 400}),
                 from_template("sim_torque", id="SIM-SB1", name="Máy siết bu-lông (mô phỏng)", line="Line 2",
                               ai={"learn_target": 160, "retrain_every": 400}),
+                from_template("sim_cnc", id="SIM-CNC1", name="Máy phay CNC vỏ bơm (mô phỏng)", line="Line 1",
+                              ai={"learn_target": 160, "retrain_every": 400}),
                 from_template("sim_air", id="SIM-KN1", name="Cụm khí nén (mô phỏng)", line="Line 3",
                               ai={"learn_target": 200, "retrain_every": 500, "auto_approve": True})]
         for cfg in demo:
             rt.store.put_machine(cfg)
     if a.add_plc:
         ip, _, port = a.add_plc.partition(":")
-        cfg = from_template("mitsubishi_press", id="M01", name="Máy ép (PLC thật)", plc={"ip": ip, "port": int(port or 3000)})
+        over = {"signal": {"register": a.signal}} if a.signal else {}
+        cfg = from_template(f"mitsubishi_{a.type}", id="M01", name=f"{profiles.PROFILES[a.type]['label']} (PLC thật)",
+                            plc={"ip": ip, "port": int(port or 3000)}, **over)
         rt.store.put_machine(cfg)
     print(f"Máy đã khai báo: {', '.join(rt.store.machines()) or '(chưa có — thêm từ dashboard)'}")
     try:

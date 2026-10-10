@@ -112,6 +112,68 @@ class McSource:
         return str(plc.batchread_wordunits(headdevice=r, readsize=1)[0] & 0xFFFF)
 
 
+# ───────────── máy CNC mô phỏng: tải trục chính (%) theo chương trình NC ─────────────
+CNC_FAULTS = {
+    "TOOL_WEAR": "Mòn dao — tải cắt tăng ở mọi lần ăn dao",
+    "TOOL_BREAK": "Gãy dao — tải tụt về mức chạy không giữa chừng",
+    "CHATTER": "Rung — tải dao động mạnh khi cắt",
+}
+
+
+def _cnc_cycle(rng, s, fault=None):
+    """Một chu kỳ gia công: khởi động trục chính (gai tải), 3 lần ăn dao với tải khác nhau, chạy không giữa các lần."""
+    n = int(rng.integers(230, 270))
+    t = np.linspace(0, 1, n)
+    idle = s["idle"]
+    y = np.full(n, idle)
+    y += 30 * np.exp(-((t - 0.03) / 0.015) ** 2)                       # tăng tốc trục chính
+    passes = [(0.10, 0.32, 1.0), (0.40, 0.62, 1.35), (0.70, 0.90, 0.8)]
+    for a, b, k in passes:
+        a += rng.uniform(-0.01, 0.01); b += rng.uniform(-0.01, 0.01)
+        load = s["load"] * k * rng.uniform(0.97, 1.03)
+        seg = (t >= a) & (t <= b)
+        ramp = np.clip((t - a) / 0.03, 0, 1) * np.clip((b - t) / 0.02, 0, 1)
+        y = np.where(seg, idle + load * ramp, y)
+    tooth = np.sin(2 * np.pi * t * n / 100 * 40)                         # răng dao cắt 40 Hz
+    cutting = y > idle + 2
+    y = y + cutting * s["load"] * 0.03 * tooth
+    if fault == "TOOL_WEAR":
+        y = np.where(cutting, idle + (y - idle) * rng.uniform(1.28, 1.45), y)
+    elif fault == "TOOL_BREAK":
+        tb = rng.uniform(0.45, 0.8)
+        k = (t > tb) & cutting
+        y[k] = idle + rng.normal(0, 0.5, k.sum())
+        i = int(tb * n)
+        y[i:i + 3] += s["load"] * 0.9
+    elif fault == "CHATTER":
+        y = y + cutting * s["load"] * rng.uniform(0.18, 0.26) * np.sin(2 * np.pi * t * n / 100 * 14)
+    return np.clip(y, 0, None)
+
+
+def cnc_session(n_cycles, seed, fault=None):
+    """Một ca trên máy CNC: tải nền, tải cắt (độ cứng lô phôi) và nhiễu cố định trong ca, khác nhau giữa các ca."""
+    rng = np.random.default_rng(seed)
+    s = {"idle": rng.uniform(6, 9), "load": 40 * rng.uniform(0.94, 1.06), "noise": rng.uniform(0.4, 0.9)}
+    out = []
+    for _ in range(n_cycles):
+        y = _cnc_cycle(rng, s, fault)
+        out.append(y + rng.normal(0, s["noise"], len(y)))
+    return out
+
+
+SIM_GEN = {"CNC_LOAD": (cnc_session, CNC_FAULTS)}
+
+
+def sim_session(proc, n, seed, fault=None):
+    if proc in SIM_GEN:
+        return SIM_GEN[proc][0](n, seed, fault)
+    return C.make_session(proc, n, seed, fault)
+
+
+def sim_faults(proc):
+    return list(SIM_GEN[proc][1]) if proc in SIM_GEN else list(C.FAULTS[proc])
+
+
 class SimSource:
     """Máy mô phỏng để demo không cần PLC: chu kỳ thật từ bộ sinh ml/cycles.py, thời gian nén lại.
 
@@ -126,8 +188,8 @@ class SimSource:
 
     def run(self, stop, on_conn, on_state, on_cycle):
         s = self.sim
-        proc = s["process"] if s["process"] in C.GEN else "PRESS_FORCE"
-        faults = list(C.FAULTS[proc])
+        proc = s["process"] if (s["process"] in C.GEN or s["process"] in SIM_GEN) else "PRESS_FORCE"
+        faults = sim_faults(proc)
         rnd = random.Random(hash(self.cfg["id"]) & 0xFFFF)
         on_conn(True, "Máy mô phỏng (không có PLC)")
         k, seed, queue = 0, (hash(self.cfg["id"]) & 0xFFF) * 100, []
@@ -135,7 +197,7 @@ class SimSource:
         while not stop.is_set():
             if not queue:
                 seed += 1
-                queue = C.make_session(proc, int(s["shift_len"]), seed)
+                queue = sim_session(proc, int(s["shift_len"]), seed)
             k += 1
             ri = (k // s["recipe_every"]) % len(recipes) if s["recipe_every"] else 0
             recipe = recipes[ri]
@@ -143,7 +205,7 @@ class SimSource:
             fault = None
             if rnd.random() < s["fault_rate"]:
                 fault = rnd.choice(faults)
-                y = np.asarray(C.make_session(proc, 1, rnd.randrange(10 ** 6), fault)[0], dtype=float)
+                y = np.asarray(sim_session(proc, 1, rnd.randrange(10 ** 6), fault)[0], dtype=float)
             y = y * (1 + 0.18 * ri) * (1 + s["drift_per_1000"] * k / 1000)
             machine_error = bool(s["error_every"]) and k % s["error_every"] == 0
             if s["dq_every"] and k % s["dq_every"] == 0:

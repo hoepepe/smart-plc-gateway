@@ -159,8 +159,12 @@ class Store:
             self.x("UPDATE cycles SET label=? WHERE id=?", (status, a["cycle_id"]))
         return a
 
-    def labeled_faults(self, machine):
-        rows = self.q("""SELECT c.f, a.fault_type FROM alarms a JOIN cycles c ON c.id=a.cycle_id
-                         WHERE a.machine=? AND a.status='fault' AND a.fault_type IS NOT NULL AND a.fault_type<>''""",
-                      (machine,))
-        return [json.loads(r["f"]) for r in rows], [r["fault_type"] for r in rows]
+    def labeled_faults(self, machines):
+        """Chu kỳ đã được xác nhận là lỗi (có loại lỗi) của một hoặc nhiều máy: [(f, loại lỗi, máy, mã hàng)]."""
+        if isinstance(machines, str):
+            machines = [machines]
+        ph = ",".join("?" * len(machines))
+        rows = self.q(f"""SELECT c.f, a.fault_type, a.machine, a.recipe FROM alarms a JOIN cycles c ON c.id=a.cycle_id
+                         WHERE a.machine IN ({ph}) AND a.status='fault' AND a.fault_type IS NOT NULL
+                         AND a.fault_type<>''""", tuple(machines))
+        return [(json.loads(r["f"]), r["fault_type"], r["machine"], r["recipe"]) for r in rows]

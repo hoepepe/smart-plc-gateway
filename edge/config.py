@@ -6,10 +6,12 @@ Một máy = một PLC + một tín hiệu quá trình (thanh ghi) + word trạn
 import copy
 import re
 
+from .profiles import PROFILES, PROCESS_TO_TYPE
+
 STATES = ["STOPPED", "READY", "AUTO", "WORKING", "DONE", "ERROR"]
 
 BASE = {
-    "id": "", "name": "", "line": "", "process": "",
+    "id": "", "name": "", "line": "", "process": "", "machine_type": "",
     "plc": {"driver": "mitsubishi_mc", "ip": "192.168.1.39", "port": 3000, "plctype": "Q"},
     "signal": {"register": "D100", "scale": 0.01, "unit": "", "min": None, "max": None},
     "state": {"register": "M0", "bits": {s: i for i, s in enumerate(STATES)}},
@@ -20,28 +22,35 @@ BASE = {
     "ai": {"learn_target": 300, "retrain_every": 500, "auto_approve": False},
 }
 
-TEMPLATES = {
-    "mitsubishi_press": dict(
-        label="Mitsubishi Q/L (MC protocol 3E) · máy ép",
-        cfg={"process": "PRESS_FORCE", "signal": {"register": "D100", "scale": 0.01, "unit": "kN"}}),
-    "mitsubishi_torque": dict(
-        label="Mitsubishi Q/L (MC protocol 3E) · máy siết",
-        cfg={"process": "TORQUE", "signal": {"register": "D200", "scale": 0.01, "unit": "N·m"}}),
-    "sim_press": dict(
-        label="Mô phỏng · máy ép (không cần PLC)",
-        cfg={"process": "PRESS_FORCE", "plc": {"driver": "simulator"}, "signal": {"unit": "kN"},
-             "simulator": {"process": "PRESS_FORCE", "period_s": 0.25, "fault_rate": 0.06, "error_every": 90,
-                           "dq_every": 160, "drift_per_1000": 0.03}}),
-    "sim_torque": dict(
-        label="Mô phỏng · máy siết (không cần PLC)",
-        cfg={"process": "TORQUE", "plc": {"driver": "simulator"}, "signal": {"unit": "N·m"},
-             "simulator": {"process": "TORQUE", "period_s": 0.3, "fault_rate": 0.05, "error_every": 120,
-                           "recipes": ["BOLT-M6", "BOLT-M8"], "recipe_every": 400}}),
-    "sim_air": dict(
-        label="Mô phỏng · cụm khí nén (không cần PLC)",
-        cfg={"process": "AIR_PRESSURE", "plc": {"driver": "simulator"}, "signal": {"unit": "bar"},
-             "simulator": {"process": "AIR_PRESSURE", "period_s": 0.35, "fault_rate": 0.05}}),
+# Thanh ghi gợi ý cho từng loại máy (kỹ sư sửa theo chương trình PLC thật)
+_REG = {"press": ("D100", 0.01), "torque": ("D200", 0.01), "cnc": ("D300", 0.1), "weld": ("D400", 0.01),
+        "injection": ("D500", 0.1), "air": ("D600", 0.01), "generic": ("D100", 1.0)}
+_SIM = {
+    "press": {"period_s": 0.25, "fault_rate": 0.06, "error_every": 90, "dq_every": 160, "drift_per_1000": 0.03},
+    "torque": {"period_s": 0.3, "fault_rate": 0.05, "error_every": 120, "recipes": ["BOLT-M6", "BOLT-M8"],
+               "recipe_every": 400},
+    "cnc": {"period_s": 0.3, "fault_rate": 0.05, "error_every": 150, "recipes": ["O1001", "O1002"],
+            "recipe_every": 500, "drift_per_1000": 0.02},
+    "air": {"period_s": 0.35, "fault_rate": 0.05},
 }
+
+
+def _templates():
+    out = {}
+    for t, p in PROFILES.items():
+        reg, scale = _REG[t]
+        common = {"machine_type": t, "process": p["process"], "signal": {"unit": p["unit"]}}
+        out[f"mitsubishi_{t}"] = dict(
+            label=f"{p['label']} · PLC Mitsubishi Q/L (MC protocol 3E)", machine_type=t, driver="mitsubishi_mc",
+            cfg={**common, "signal": {"register": reg, "scale": scale, "unit": p["unit"]}})
+        if p["sim"]:
+            out[f"sim_{t}"] = dict(
+                label=f"{p['label']} · mô phỏng (không cần PLC)", machine_type=t, driver="simulator",
+                cfg={**common, "plc": {"driver": "simulator"}, "simulator": {"process": p["process"], **_SIM[t]}})
+    return out
+
+
+TEMPLATES = _templates()
 
 REG = re.compile(r"^(D|W|R|ZR)\d+$", re.I)
 BIT = re.compile(r"^(M|X|Y|B|L)[0-9A-F]+$", re.I)
@@ -69,6 +78,11 @@ def normalize(cfg):
     if not re.match(r"^[A-Z0-9_-]{1,16}$", c["id"]):
         raise ValueError("Mã máy chỉ gồm chữ, số, '-' hoặc '_' (tối đa 16 ký tự), ví dụ M05")
     c["name"] = str(c["name"]).strip() or c["id"]
+    mt = c.get("machine_type") or PROCESS_TO_TYPE.get(c.get("process"), "generic")
+    if mt not in PROFILES:
+        raise ValueError(f"Loại máy chưa có: {mt}. Có: {', '.join(PROFILES)}")
+    c["machine_type"] = mt
+    c["process"] = c.get("process") or PROFILES[mt]["process"]
     drv = c["plc"]["driver"]
     if drv not in ("mitsubishi_mc", "simulator"):
         raise ValueError("Driver PLC chưa hỗ trợ. Hiện có: mitsubishi_mc, simulator (Omron FINS, Keyence đang làm)")
@@ -100,5 +114,5 @@ def normalize(cfg):
 
 
 def templates_public():
-    return {k: dict(label=v["label"], cfg=normalize(merge(merge(BASE, v["cfg"]), {"id": "NEW", "name": ""})))
+    return {k: dict(label=v["label"], machine_type=v["machine_type"], driver=v["driver"], cfg=normalize(merge(merge(BASE, v["cfg"]), {"id": "NEW", "name": ""})))
             for k, v in TEMPLATES.items()}

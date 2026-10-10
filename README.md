@@ -125,7 +125,7 @@ Mỗi máy tự học chuẩn bình thường của chính nó ngay trên gatewa
 
 ```bash
 pip install -r edge/requirements.txt
-python -m edge.runtime --demo                      # 3 máy mô phỏng, không cần PLC
+python -m edge.runtime --demo                      # 4 máy mô phỏng (ép, siết, CNC, khí nén)
 python -m edge.runtime --add-plc 192.168.1.39:3000 # PLC Mitsubishi thật, chỉ đọc
 npm run dev                                         # mở tab "Máy và AI tự học"
 python -m pytest tests/test_edge.py                 # 6 bài kiểm thử vòng đời

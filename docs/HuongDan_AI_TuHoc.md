@@ -29,12 +29,41 @@ Khai báo ──▶ Tự học N chu kỳ ──▶ Kỹ sư duyệt ──▶ G
 
 **Lỗi tín hiệu khác lỗi máy:** tín hiệu đứng im, vượt dải vật lý, hay đọc PLC bị hụt mẫu thì báo **lỗi tín hiệu**. Những chu kỳ này không được chấm điểm và không được dùng để học.
 
+## Dashboard đổi theo loại máy
+
+PLC không tự cho biết nó điều khiển máy gì: thanh ghi D300 chỉ là một con số. Nên kỹ sư chọn **loại máy một lần**
+trong form "Thêm máy". Sau đó dashboard tự nói đúng ngôn ngữ của máy đó. Thuật toán AI vẫn giống nhau cho mọi loại.
+
+| Loại máy | Tín hiệu | Một chu kỳ gọi là | Mã hàng gọi là | Gợi ý loại lỗi khi bấm "Đúng là lỗi" |
+|---|---|---|---|---|
+| Máy ép (press-fit) | Lực ép (kN) | lần ép | Mã hàng | Thiếu chi tiết, lệch vị trí, ép hai lần… |
+| Máy siết bu-lông | Mô-men siết (N·m) | lần siết | Mã bu-lông | Trờn ren, ren chéo, chưa đủ lực… |
+| Máy CNC phay / tiện | Tải trục chính (%) | chu kỳ gia công | Chương trình NC | Mòn dao, gãy/mẻ dao, rung (chatter)… |
+| Máy hàn điểm | Dòng hàn (kA) | điểm hàn | Chương trình hàn | Thiếu ngấu, bắn tóe, điện cực mòn… |
+| Máy ép phun nhựa | Áp suất phun (MPa) | lần phun | Khuôn | Short shot, ba via, co ngót… |
+| Cụm khí nén / kiểm tra rò | Áp suất khí (bar) | chu kỳ | Mã hàng | Rò khí, nguồn khí yếu, van kẹt |
+| Máy khác | Tín hiệu quá trình | chu kỳ | Mã hàng | (kỹ sư tự gõ) |
+
+Những gì đổi theo loại máy:
+- biểu tượng và tên loại trên thẻ máy
+- tên tín hiệu và đơn vị
+- cách gọi chu kỳ và mã hàng
+- tên các đặc trưng trong cảnh báo, ví dụ máy CNC hiện "độ rung tải (chatter)" thay vì "độ gồ ghề"
+- danh sách loại lỗi bấm nhanh
+- thanh ghi gợi ý trong form
+
+Thêm loại máy mới chỉ cần thêm một mục trong `edge/profiles.py`, không phải sửa giao diện.
+
+**Phân loại lỗi dùng chung giữa các máy cùng loại.** Nhãn "Đúng là lỗi · Mòn dao" gắn trên máy CNC số 1 cũng giúp
+máy CNC số 2 đoán loại lỗi, kể cả khi hai máy chạy mức tải khác nhau. Lý do: mỗi chu kỳ lỗi được quy về "lệch bao nhiêu
+lần độ lệch thường" so với chuẩn của chính máy đó. Máy khác loại thì không dùng chung.
+
 ## Chạy thử không cần PLC (máy mô phỏng)
 
 ```
 mosquitto -c mosquitto.conf -v               # hoặc dịch vụ Mosquitto đang chạy sẵn
 pip install -r edge/requirements.txt
-python -m edge.runtime --demo                 # 3 máy mô phỏng: ép, siết (2 mã hàng), khí nén (tự duyệt)
+python -m edge.runtime --demo                 # 4 máy mô phỏng: ép, siết (2 mã bu-lông), CNC (2 chương trình NC), khí nén (tự duyệt)
 npm run dev                                   # mở http://localhost:3000 → tab "Máy và AI tự học"
 ```
 
@@ -44,10 +73,13 @@ Chạy lại từ đầu thì thêm `--fresh` để xoá dữ liệu cũ (`edge_
 ## Chạy với PLC Mitsubishi thật
 
 ```
-python -m edge.runtime --add-plc 192.168.1.39:3000
+python -m edge.runtime --add-plc 192.168.1.39:3000                          # máy ép, tín hiệu D100
+python -m edge.runtime --add-plc 192.168.1.39:3000 --type cnc --signal D100  # cùng PLC nhưng trình bày như máy CNC
 ```
 
-Lệnh này khai báo nhanh máy M01 với cấu hình: tín hiệu D100 × 0,01, word trạng thái M0 (bit 3 = đang làm việc),
+`--type` nhận: press, torque, cnc, weld, injection, air, generic.
+
+Lệnh này khai báo nhanh máy M01 với cấu hình: tín hiệu theo loại máy (máy ép: D100 × 0,01), word trạng thái M0 (bit 3 = đang làm việc),
 mã lỗi D110. Cấu hình khác thì thêm máy từ dashboard. Cổng nhập **số thập phân**, mỗi dòng Open Setting chỉ nhận
 một kết nối. Gateway chỉ gửi lệnh **đọc**.
 
@@ -72,6 +104,19 @@ và loại đúng chu kỳ có máy báo lỗi (M5 + D110).
 
 ## Giới hạn hiện tại (nói thật nếu được hỏi)
 
-- Máy mô phỏng khí nén bắt lỗi kém: với dữ liệu giả lập, ngưỡng chọn được không tách nổi LEAK/VALVE_STICK khỏi biến động áp nguồn giữa các ca. Đây là giới hạn của bộ đặc trưng hiện tại với loại tín hiệu này. Hướng sửa: thêm đặc trưng tương đối (độ sâu đoạn tụt so với mức nền).
+- Đo trên dữ liệu mô phỏng: học 200 chu kỳ qua 5 ca, thử trên ca chưa từng thấy.
+
+  | Máy | Bắt lỗi | Báo nhầm |
+  |---|---|---|
+  | Máy ép | 98–100% | 1,3% |
+  | Máy siết | 100% | 4% |
+  | CNC | mòn dao 100%, rung 100%, gãy dao 70% | 0% |
+  | Khí nén | rò khí 100%, van kẹt 68% | 8% |
+
+  - CNC gãy dao muộn ở lần ăn dao cuối thì tải chỉ tụt ngắn nên bị lọt.
+  - Khí nén báo nhầm cao vì áp nguồn dao động giữa các ca.
+  - Học quá ít (khoảng 120 chu kỳ) thì lỗi "ép hai lần" chỉ bắt được khoảng 40%. Vì vậy mặc định học 300 chu kỳ và nên học qua 2 ca.
+- Chưa tự nhận ra loại máy từ hình dạng tín hiệu; kỹ sư chọn một lần khi thêm máy.
+- Các tab cũ (Giám sát máy, OEE, Phát hiện bất thường) vẫn là demo cố định 4 máy. Tab "Máy và AI tự học" là phần tự đổi theo máy.
 - Driver mới có Mitsubishi MC 3E. Omron FINS và Keyence chưa làm.
 - Ngưỡng phân vị 99,5 → mục tiêu báo nhầm khoảng 0,5–1% mỗi tầng. Con số thật phải đo trên máy thật.

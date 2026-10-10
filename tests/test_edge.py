@@ -110,3 +110,28 @@ def test_feedback_new_normal_and_classifier():
     open_ids = [e["alarm_id"] for e in evs if e.get("alarm_id")]
     out = b.feedback(open_ids[0], "new_normal", all_open=True)
     assert out["applied"] >= len(open_ids) and out.get("candidate")
+
+
+def test_shared_classifier_same_machine_type():
+    """Nhãn lỗi gắn trên máy ép A giúp máy ép B (lực danh định khác) đoán loại lỗi; máy siết thì không dùng chung."""
+    from edge.config import from_template
+    st = Store(os.path.join(tempfile.mkdtemp(), "t.db"))
+    a_cfg = from_template("sim_press", id="EPA", ai=dict(learn_target=120, clf_min_total=6, clf_min_per_type=3))
+    b_cfg = from_template("sim_press", id="EPB", ai=dict(learn_target=120, clf_min_total=6, clf_min_per_type=3))
+    t_cfg = from_template("sim_torque", id="SB1")
+    for c in (a_cfg, b_cfg, t_cfg):
+        st.put_machine(c)
+    a, b = Brain("EPA", a_cfg, st), Brain("EPB", b_cfg, st)
+    learn4(a); a.approve("*")
+    for s in range(4):                                   # máy B chạy lực cao hơn 40%
+        feed(b, stream("PRESS_FORCE", 30, 200 + s, scale=1.4))
+    b.approve("*")
+    for fault in ("MISSING_PART", "DOUBLE_HIT"):
+        for e in feed(a, stream("PRESS_FORCE", 6, 20 + len(fault), fault=fault)):
+            if e.get("alarm_id"):
+                a.feedback(e["alarm_id"], "fault", fault)
+    b._fit_classifier()
+    assert b.clf_info["ready"] and b.clf_info["own"] == 0 and b.clf_info["shared_machines"] == 1
+    e = [x for x in feed(b, stream("PRESS_FORCE", 4, 77, fault="DOUBLE_HIT", scale=1.4)) if x.get("suggestion")]
+    assert e and e[-1]["suggestion"]["type"] == "DOUBLE_HIT"
+    assert Brain("SB1", t_cfg, st).clf_info["n"] == 0

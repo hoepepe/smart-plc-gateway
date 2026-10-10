@@ -22,6 +22,7 @@ from collections import Counter
 import numpy as np
 
 from . import detector as DT
+from .profiles import PROCESS_TO_TYPE
 
 DEFAULTS = dict(learn_target=300, retrain_every=500, drift_window=300, min_drift=50,
                 new_normal_min=10, auto_approve=False, shift_warn=1.0,
@@ -32,6 +33,7 @@ class Brain:
     def __init__(self, mid, cfg, store):
         self.mid = mid
         self.cfg = {**DEFAULTS, **(cfg.get("ai") or {})}
+        self.machine_type = cfg.get("machine_type") or PROCESS_TO_TYPE.get(cfg.get("process"), "generic")
         self.store = store
         self.cache = {}
         self.clf = None
@@ -104,7 +106,7 @@ class Brain:
                           model_version=m["version"])
         ev.update(kind="score", mode=mode, score=sc, version=m["version"], cycle_id=cid)
         if sc["flag"]:
-            sug = self.suggest(f)
+            sug = self.suggest(f, m["body"])
             ev["alarm_id"] = s.add_alarm(self.mid, recipe, ts, cid, sc["norm"], sc["top"], sug)
             ev["suggestion"] = sug
         c["since"] += 1
@@ -234,13 +236,44 @@ class Brain:
         return out
 
     # ───────────── phân loại lỗi (khi đã đủ nhãn) ─────────────
+    # Dùng chung giữa các máy CÙNG LOẠI: mỗi chu kỳ lỗi được quy về "lệch bao nhiêu lần độ lệch thường"
+    # so với chuẩn của chính máy / mã hàng đó, nên máy ép 12 kN và máy ép 20 kN học chung được một bộ phân loại.
+    def peers(self):
+        ms = self.store.machines()
+        out = [k for k, c in ms.items()
+               if (c.get("machine_type") or PROCESS_TO_TYPE.get(c.get("process"), "generic")) == self.machine_type]
+        return out if self.mid in out else out + [self.mid]
+
+    def _ref_model(self, machine, recipe, cache):
+        k = (machine, recipe)
+        if k not in cache:
+            m = self.store.model(machine, recipe, status="active")
+            if m is None:
+                rows = [r for r in self.store.models(machine, recipe) if r["status"] != "rejected"]
+                m = self.store.model(machine, recipe, version=rows[-1]["version"]) if rows else None
+            cache[k] = m["body"] if m else None
+        return cache[k]
+
+    @staticmethod
+    def _rel(body, f):
+        return (np.asarray(f, dtype=float) - np.asarray(body["med"])) / np.asarray(body["scale"])
+
     def _fit_classifier(self):
-        X, y = self.store.labeled_faults(self.mid)
+        peers = self.peers()
+        rows = self.store.labeled_faults(peers)
+        cache, X, y, src = {}, [], [], Counter()
+        for f, ft, mach, rec in rows:
+            body = self._ref_model(mach, rec, cache)
+            if body is None:
+                continue
+            X.append(self._rel(body, f)); y.append(ft); src[mach] += 1
         cnt = Counter(y)
         types = {k: v for k, v in cnt.items() if v >= self.cfg["clf_min_per_type"]}
         ready = len(y) >= self.cfg["clf_min_total"] and len(types) >= 2
         self.clf_info = dict(n=len(y), types=dict(cnt), need_total=self.cfg["clf_min_total"],
-                             need_per_type=self.cfg["clf_min_per_type"], ready=ready)
+                             need_per_type=self.cfg["clf_min_per_type"], ready=ready,
+                             machine_type=self.machine_type, shared_machines=len(src),
+                             own=src.get(self.mid, 0))
         self.clf = None
         if ready:
             from sklearn.ensemble import RandomForestClassifier
@@ -248,10 +281,10 @@ class Brain:
             Xa, ya = np.asarray(X)[keep], [y[i] for i in keep]
             self.clf = RandomForestClassifier(n_estimators=150, random_state=0, class_weight="balanced").fit(Xa, ya)
 
-    def suggest(self, f):
+    def suggest(self, f, body):
         if self.clf is None:
             return None
-        p = self.clf.predict_proba([f])[0]
+        p = self.clf.predict_proba([self._rel(body, f)])[0]
         i = int(np.argmax(p))
         return dict(type=str(self.clf.classes_[i]), prob=round(float(p[i]), 2))
 
