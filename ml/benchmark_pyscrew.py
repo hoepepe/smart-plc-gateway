@@ -69,7 +69,7 @@ def load(scenario, cache_dir, from_pickle=None):
     print(f"Đang tải kịch bản {scenario} (lần đầu cần mạng tới zenodo.org, có thể mất vài phút)…")
     return pyscrew.get_data(
         scenario=scenario,
-        return_measurements=["time", "torque", "angle"],
+        return_measurements=None,    # lấy cả 4 đại lượng: pyscrew 1.2.2 lỗi nếu bỏ gradient
         target_length=None,          # giữ độ dài thật của từng lần siết, không đệm số 0
         cache_dir=cache_dir,
     )
