@@ -3,7 +3,7 @@ train_from_csv.py — Huấn luyện lại bộ phát hiện bất thường tr�
 
 Dùng sau khi đã ghi được một số chu kỳ bằng tools/plc_to_mqtt.py --log-csv:
 
-    python tools/plc_to_mqtt.py --plc 192.168.1.39 --port 5000 --log-csv cycles_M01.csv
+    python tools/plc_to_mqtt.py --plc 192.168.1.39 --plc-port 5000 --log-csv cycles_M01.csv
     (để chạy một lúc, càng nhiều chu kỳ BÌNH THƯỜNG càng tốt — ít nhất khoảng 60-100)
     Ctrl+C để dừng, rồi:
     python ml/train_from_csv.py cycles_M01.csv --process PRESS_FORCE --machine M01
