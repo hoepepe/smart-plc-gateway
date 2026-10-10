@@ -52,6 +52,11 @@ LEDGE = DOWN
 # 0.96" SSD1306: PCB 27 × 27, dày 4,1, vùng hiển thị 21,74 × 11,2 (datasheet module)
 OLED = dict(x=58, y=50, L=27.0, W=27.0, win_dx=2.0, win_dy=7.0, win_L=23.0, win_W=13.0,
             hole_inset=2.0, hole_r=0.9, post_h=4.0)
+# 2 nút nhấn nhả Ø12 trên nắp (firmware/nut_xac_nhan): NG đỏ = "Đúng là lỗi", OK xanh = "Báo nhầm".
+# Đặt trên ESP32 (mạch thấp, còn ~20 mm trống phía dưới), thân nút sâu ≤ 12 mm.
+BUTTONS = [dict(x=139.0, y=46.0, r=6.1, label="NG", color="#e53e3e"), dict(x=139.0, y=63.0, r=6.1, label="OK", color="#38a169")]
+# 3 LED Ø5: nguồn, kết nối PLC, đèn cảnh báo AI (2 màu đỏ/xanh — vàng = sáng cả hai)
+LEDS = [dict(x=20.0, label="Nguồn"), dict(x=30.0, label="PLC"), dict(x=40.0, label="AI")]
 
 # ───────────────────────── Lỗ khoét vách ─────────────────────────
 def _top(name):
@@ -177,15 +182,17 @@ def make_lid():
     # khe thông gió trên LM2596 và ESP32
     for i in range(9):
         lid = lid - box(108 + i * 5, 72, -1, 2.0, 24, LID_T + 2)     # trên LM2596
-    for i in range(7):
-        lid = lid - box(108 + i * 5, 44, -1, 2.0, 20, LID_T + 2)     # trên ESP32, chừa chỗ lỗ nút
+    for i in range(5):
+        lid = lid - box(108 + i * 5, 44, -1, 2.0, 20, LID_T + 2)     # trên ESP32, chừa chỗ 2 nút OK/NG
+    for b in BUTTONS:
+        lid = lid - cyl(b["x"], b["y"], -1, LID_T + 2, b["r"])
     # 2 lỗ kim Ø3 trên nút EN (reset) và BOOT của ESP32 — bấm bằng que nhựa/kim
     ex, ey, eL, eW = MODULES["ESP32"][:4]
     for by in (ey + 4.0, ey + eW - 4.0):
         lid = lid - cyl(ex + eL - 6.0, by, -1, LID_T + 2, 1.6)
-    # 2 lỗ LED trạng thái Ø5 (nguồn, kết nối PLC)
-    for lx in (20, 30):
-        lid = lid - cyl(lx, IN_W - 12, -1, LID_T + 2, 2.6)
+    # 3 lỗ LED Ø5 (nguồn, kết nối PLC, cảnh báo AI)
+    for led in LEDS:
+        lid = lid - cyl(led["x"], IN_W - 12, -1, LID_T + 2, 2.6)
     return lid
 
 

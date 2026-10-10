@@ -3,6 +3,7 @@ import { ProcessType } from '../types';
 import { DATA, proc, threshold, mahalanobis } from '../utils/detector';
 import { pct } from '../utils/oee';
 import { Card, CycleChart, Bar, Note } from './charts';
+import { ReliabilityPanel } from './ReliabilityPanel';
 
 const PROCS: ProcessType[] = ['PRESS_FORCE', 'TORQUE', 'AIR_PRESSURE'];
 
@@ -30,6 +31,12 @@ export function DetectionTab() {
 
   return (
     <div className="space-y-5">
+      <ReliabilityPanel />
+      <div className="pt-4 border-t border-slate-200">
+        <h3 className="text-base font-semibold text-slate-900">Mô hình demo huấn luyện trên dữ liệu mô phỏng</h3>
+        <p className="text-sm text-slate-500 mt-1">Mô hình huấn luyện sẵn bằng <code className="font-mono">ml/cycles.py</code>, dùng cho màn hình Tổng quan khi chưa nối PLC.
+          Khi gắn vào máy thật, gateway không dùng mô hình này mà tự học chuẩn riêng của từng máy (tab Máy và AI tự học).</p>
+      </div>
       <div className="flex flex-wrap gap-2" role="tablist" aria-label="Chọn đại lượng">
         {PROCS.map((x) => (
           <button key={x} role="tab" aria-selected={p === x} onClick={() => setP(x)}

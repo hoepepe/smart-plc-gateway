@@ -185,6 +185,15 @@ class SimSource:
         self.sim = {"process": cfg.get("process") or "PRESS_FORCE", "period_s": 0.25, "fault_rate": 0.05,
                     "error_every": 0, "dq_every": 0, "drift_per_1000": 0.0, "recipes": None, "recipe_every": 0,
                     "shift_len": 40, **(cfg.get("simulator") or {})}
+        self.forced = []          # lỗi bắt buộc cho các chu kỳ kế tiếp (lệnh sim_inject từ dashboard)
+
+    def inject(self, fault=None, count=1):
+        proc = self.sim["process"] if (self.sim["process"] in C.GEN or self.sim["process"] in SIM_GEN) else "PRESS_FORCE"
+        faults = sim_faults(proc)
+        f = fault if fault in faults else None
+        n = max(1, min(10, int(count)))
+        self.forced += [f or faults[i % len(faults)] for i in range(n)]
+        return dict(queued=n, faults=self.forced[-n:])
 
     def run(self, stop, on_conn, on_state, on_cycle):
         s = self.sim
@@ -203,7 +212,10 @@ class SimSource:
             recipe = recipes[ri]
             y = np.asarray(queue.pop(0), dtype=float)
             fault = None
-            if rnd.random() < s["fault_rate"]:
+            if self.forced:
+                fault = self.forced.pop(0)
+                y = np.asarray(sim_session(proc, 1, rnd.randrange(10 ** 6), fault)[0], dtype=float)
+            elif rnd.random() < s["fault_rate"]:
                 fault = rnd.choice(faults)
                 y = np.asarray(sim_session(proc, 1, rnd.randrange(10 ** 6), fault)[0], dtype=float)
             y = y * (1 + 0.18 * ri) * (1 + s["drift_per_1000"] * k / 1000)

@@ -10,11 +10,14 @@ MQTT (gw = mã gateway, mặc định 01):
     gw/{gw}/m/{máy}/state                    trạng thái máy (như cầu nối cũ)
     gw/{gw}/m/{máy}/cycle                    mỗi chu kỳ: đường cong, đặc trưng, điểm, chế độ, cảnh báo
     gw/{gw}/m/{máy}/learn         (giữ lại)  tiến độ học, mô hình đang chạy / chờ duyệt, phiên bản, cảnh báo gần đây
+    gw/{gw}/m/{máy}/andon         (giữ lại)  màu đèn trên hộp gateway {"color": green|yellow|red|off, "blink", "text"}
+    gw/{gw}/m/{máy}/button                   nút bấm trên hộp gateway gửi lên {"label": "fault"|"false_alarm"}
+    gw/{gw}/m/{máy}/button_ack               trả lời nút bấm {"ok", "msg"} (để ESP32 nháy đèn xác nhận)
     gw/{gw}/cmd                              lệnh từ dashboard  {"id","op",...}
     gw/{gw}/ack                              trả lời lệnh      {"id","ok","error","result"}
 
 Lệnh (op): add_machine, update_machine, remove_machine, approve, reject, relearn, rollback, retrain_now,
-           feedback, set_ai
+           feedback, set_ai, ng_check_start, ng_check_cancel, report_missed, sim_inject (chỉ máy mô phỏng)
 """
 import argparse
 import json
@@ -54,7 +57,9 @@ class Worker:
         self.state = None
         self.cycles = 0
         self._last_pub = 0
-        self.lock = threading.Lock()
+        self._andon = None
+        self.src = None
+        self.lock = threading.RLock()
         self.th = threading.Thread(target=self._run, daemon=True, name=f"may-{self.mid}")
 
     def start(self):
@@ -66,7 +71,8 @@ class Worker:
 
     def _run(self):
         try:
-            make_source(self.cfg).run(self.stop, self.on_conn, self.on_state, self.on_cycle)
+            self.src = make_source(self.cfg)
+            self.src.run(self.stop, self.on_conn, self.on_state, self.on_cycle)
         except Exception as e:
             self.on_conn(False, f"Nguồn dữ liệu dừng: {e}")
             traceback.print_exc()
@@ -108,7 +114,7 @@ class Worker:
             if c.get("injected"):
                 out["injected"] = c["injected"]       # chỉ có ở máy mô phỏng — để kiểm chứng, AI không dùng
             self.rt.pub(f"m/{self.mid}/cycle", out)
-            if ev.get("alarm_id") or ev.get("trained") or ev.get("candidate"):
+            if ev.get("alarm_id") or ev.get("trained") or ev.get("candidate") or ev.get("kind") == "ng_sample":
                 self.publish_status(force=True)
             else:
                 self.publish_status()
@@ -122,6 +128,50 @@ class Worker:
         st.update(conn=self.conn, state=self.state, cycles_seen=self.cycles, ts=int(now * 1000),
                   alarms=self.rt.store.alarms(self.mid, 25))
         self.rt.pub(f"m/{self.mid}/learn", st, retain=True)
+        self.publish_andon(st)
+
+    def andon(self, st):
+        """Màu đèn trên hộp gateway — công nhân nhìn là biết, không cần mở dashboard."""
+        if not self.conn.get("ok"):
+            return dict(color="red", blink=False, text="Mat ket noi PLC")
+        if self.brain.ng:
+            return dict(color="yellow", blink=True, text="Kiem tra mau NG")
+        recent = [a for a in st.get("alarms", []) if a["status"] == "open" and time.time() - a["ts"] < 900]
+        if recent:
+            return dict(color="red", blink=True, text=f"{len(recent)} canh bao AI")
+        modes = {r["mode"] for r in st.get("recipes", [])}
+        if "review" in modes:
+            return dict(color="yellow", blink=False, text="Cho ky su duyet")
+        if "learning" in modes or not modes:
+            return dict(color="yellow", blink=False, text="Dang hoc")
+        return dict(color="green", blink=False, text="Binh thuong")
+
+    def publish_andon(self, st):
+        a = self.andon(st)
+        if a != self._andon:
+            self._andon = a
+            self.rt.pub(f"m/{self.mid}/andon", a, retain=True)
+
+    def button(self, label):
+        """Nút trên hộp gateway: NG = "Đúng là lỗi", OK = "Báo nhầm" cho cảnh báo mở gần nhất (trong 15 phút).
+        Không có cảnh báo mở mà bấm NG → ghi "AI bỏ sót" cho chu kỳ vừa chạy."""
+        if label not in ("fault", "false_alarm"):
+            raise ValueError("Nút chỉ gửi fault hoặc false_alarm")
+        with self.lock:
+            open_ = [a for a in self.rt.store.alarms(self.mid, 10) if a["status"] == "open" and time.time() - a["ts"] < 900]
+            if open_:
+                out = self.brain.feedback(open_[0]["id"], label, source="button")
+                msg = "Da ghi: dung la loi" if label == "fault" else "Da ghi: bao nham"
+            elif label == "fault":
+                rec = [c for c in self.rt.store.last_monitor_cycles(self.mid, 1) if not c["flag"]]
+                if not rec:
+                    raise ValueError("Khong co chu ky nao de ghi")
+                out = self.brain.report_missed(rec[0]["id"], source="button")
+                msg = "Da ghi: AI bo sot"
+            else:
+                raise ValueError("Khong co canh bao nao dang mo")
+        self.publish_status(force=True)
+        return dict(msg=msg, **out)
 
 
 class Runtime:
@@ -145,6 +195,7 @@ class Runtime:
 
     def _on_connect(self, cli, *a, **k):
         cli.subscribe(f"gw/{self.gw}/cmd")
+        cli.subscribe(f"gw/{self.gw}/m/+/button")
         self.pub("online", {"online": True, "ts": int(time.time() * 1000)}, retain=True)
         self.publish_registry()
         with self.wlock:
@@ -156,6 +207,18 @@ class Runtime:
         try:
             cmd = json.loads(msg.payload.decode())
         except Exception:
+            return
+        if msg.topic.endswith("/button"):
+            mid = msg.topic.split("/")[3]
+            with self.wlock:
+                w = self.workers.get(mid)
+            try:
+                if not w:
+                    raise ValueError("Khong co may " + mid)
+                res = w.button(cmd.get("label"))
+                self.pub(f"m/{mid}/button_ack", {"ok": True, **res})
+            except Exception as e:
+                self.pub(f"m/{mid}/button_ack", {"ok": False, "msg": str(e)})
             return
         rid = cmd.get("id")
         try:
@@ -202,6 +265,15 @@ class Runtime:
         if not w:
             raise ValueError(f"Không có máy {mid}")
         b = w.brain
+        w.lock.acquire()
+        try:
+            res = self._op(op, cmd, w, b, recipe)
+        finally:
+            w.lock.release()
+        w.publish_status(force=True)
+        return res
+
+    def _op(self, op, cmd, w, b, recipe):
         if op == "approve":
             res = {"version": b.approve(recipe)}
         elif op == "reject":
@@ -212,14 +284,28 @@ class Runtime:
             b.rollback(recipe, cmd["version"]); res = {"version": int(cmd["version"])}
         elif op == "retrain_now":
             res = {"version": b.retrain_now(recipe)}
-        elif op == "feedback":
-            res = b.feedback(cmd["alarm_id"], cmd["label"], cmd.get("fault_type"), bool(cmd.get("all_open")))
-            if cmd["label"] == "fault":          # nhãn lỗi dùng chung cho mọi máy cùng loại
+        elif op in ("feedback", "report_missed"):
+            if op == "feedback":
+                res = b.feedback(cmd["alarm_id"], cmd["label"], cmd.get("fault_type"), bool(cmd.get("all_open")))
+            else:
+                res = b.report_missed(cmd["cycle_id"], cmd.get("fault_type"))
+            if op == "report_missed" or cmd["label"] == "fault":   # nhãn lỗi dùng chung cho mọi máy cùng loại
                 with self.wlock:
-                    peers = [o for k, o in self.workers.items() if k != mid and o.brain.machine_type == b.machine_type]
+                    peers = [o for k, o in self.workers.items() if k != w.mid and o.brain.machine_type == b.machine_type]
                 for o in peers:
                     o.brain._fit_classifier()
                     o.publish_status(force=True)
+        elif op == "sim_inject":
+            # chỉ máy mô phỏng: N chu kỳ kế tiếp mang lỗi — để demo kiểm tra mẫu NG khi không có máy thật
+            if not hasattr(w.src, "inject"):
+                raise ValueError("Chỉ máy mô phỏng mới chèn được chu kỳ lỗi")
+            res = w.src.inject(cmd.get("fault"), int(cmd.get("count", 1)))
+            if b.ng:          # đang kiểm tra mẫu NG: đếm lại từ chi tiết lỗi đầu tiên
+                b.ng["items"] = []
+        elif op == "ng_check_start":
+            res = b.start_ng_check(cmd.get("recipe") or "*", cmd.get("expected", 3), cmd.get("note", ""))
+        elif op == "ng_check_cancel":
+            res = b.cancel_ng_check() or {}
         elif op == "set_ai":
             cfg = dict(w.cfg)
             cfg["ai"] = {**cfg.get("ai", {}), **(cmd.get("ai") or {})}
@@ -231,7 +317,6 @@ class Runtime:
             res = {"ai": cfg["ai"]}
         else:
             raise ValueError(f"Lệnh không hỗ trợ: {op}")
-        w.publish_status(force=True)
         return res
 
     def run(self):

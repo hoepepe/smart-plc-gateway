@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS cycles (
   f TEXT, score REAL, flag INTEGER DEFAULT 0,
   role TEXT,            -- learn | hold | monitor | excluded | discarded
   reason TEXT,          -- lý do loại (machine_error, dq:...)
-  label TEXT,           -- NULL | fault | false_alarm | new_normal
+  label TEXT,           -- NULL | fault | false_alarm | new_normal | missed (AI bỏ sót) | ng_sample (mẫu NG kiểm tra)
   model_version INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_cycles ON cycles(machine, recipe, role, id);
@@ -28,8 +28,12 @@ CREATE TABLE IF NOT EXISTS models (
 );
 CREATE TABLE IF NOT EXISTS alarms (
   id INTEGER PRIMARY KEY AUTOINCREMENT, machine TEXT, recipe TEXT, ts REAL, cycle_id INTEGER,
-  norm REAL, top TEXT, status TEXT DEFAULT 'open',   -- open | fault | false_alarm | new_normal
-  fault_type TEXT, suggestion TEXT, resolved REAL
+  norm REAL, top TEXT, status TEXT DEFAULT 'open',   -- open | fault | false_alarm | new_normal | missed
+  fault_type TEXT, suggestion TEXT, resolved REAL, source TEXT   -- dashboard | button
+);
+CREATE TABLE IF NOT EXISTS checks (      -- kiểm tra mẫu NG chuẩn (đầu ca)
+  id INTEGER PRIMARY KEY AUTOINCREMENT, machine TEXT, recipe TEXT, started REAL, finished REAL,
+  expected INTEGER, caught INTEGER, items TEXT, note TEXT
 );
 """
 
@@ -43,6 +47,9 @@ class Store:
         self.db.row_factory = sqlite3.Row
         with self.lock:
             self.db.executescript(SCHEMA)
+            cols = {r[1] for r in self.db.execute("PRAGMA table_info(alarms)")}
+            if "source" not in cols:                      # edge.db từ phiên bản cũ
+                self.db.execute("ALTER TABLE alarms ADD COLUMN source TEXT")
             self.db.commit()
 
     def q(self, sql, args=(), one=False):
@@ -157,8 +164,9 @@ class Store:
             out.append(d)
         return out
 
-    def resolve_alarm(self, aid, status, fault_type=None):
-        self.x("UPDATE alarms SET status=?, fault_type=?, resolved=? WHERE id=?", (status, fault_type, time.time(), aid))
+    def resolve_alarm(self, aid, status, fault_type=None, source=None):
+        self.x("UPDATE alarms SET status=?, fault_type=?, resolved=?, source=? WHERE id=?",
+               (status, fault_type, time.time(), source, aid))
         a = self.alarm(aid)
         if a:
             self.x("UPDATE cycles SET label=? WHERE id=?", (status, a["cycle_id"]))
@@ -170,6 +178,28 @@ class Store:
             machines = [machines]
         ph = ",".join("?" * len(machines))
         rows = self.q(f"""SELECT c.f, a.fault_type, a.machine, a.recipe FROM alarms a JOIN cycles c ON c.id=a.cycle_id
-                         WHERE a.machine IN ({ph}) AND a.status='fault' AND a.fault_type IS NOT NULL
+                         WHERE a.machine IN ({ph}) AND a.status IN ('fault','missed') AND a.fault_type IS NOT NULL
                          AND a.fault_type<>''""", tuple(machines))
         return [(json.loads(r["f"]), r["fault_type"], r["machine"], r["recipe"]) for r in rows]
+
+    # ── độ chính xác thực tế (từ xác nhận của người vận hành) ──
+    def field_counts(self, machine, since=0):
+        rows = self.q("SELECT status, COUNT(*) c FROM alarms WHERE machine=? AND ts>=? GROUP BY status", (machine, since))
+        return {r["status"]: r["c"] for r in rows}
+
+    def add_check(self, machine, recipe, started, expected, items, note=""):
+        caught = sum(1 for i in items if i["flag"])
+        return self.x("INSERT INTO checks(machine,recipe,started,finished,expected,caught,items,note) VALUES(?,?,?,?,?,?,?,?)",
+                      (machine, recipe, started, time.time(), expected, caught, json.dumps(items, ensure_ascii=False), note))
+
+    def checks(self, machine, limit=10):
+        rows = self.q("SELECT * FROM checks WHERE machine=? ORDER BY id DESC LIMIT ?", (machine, limit))
+        out = []
+        for r in rows:
+            d = dict(r); d["items"] = json.loads(d["items"] or "[]"); out.append(d)
+        return out
+
+    def last_monitor_cycles(self, machine, n=12):
+        rows = self.q("""SELECT id, recipe, ts, score, flag, label FROM cycles WHERE machine=? AND role='monitor'
+                         AND (label IS NULL OR label NOT IN ('ng_sample')) ORDER BY id DESC LIMIT ?""", (machine, n))
+        return [dict(r) for r in rows]

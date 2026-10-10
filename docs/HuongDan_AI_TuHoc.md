@@ -58,6 +58,34 @@ Thêm loại máy mới chỉ cần thêm một mục trong `edge/profiles.py`, 
 máy CNC số 2 đoán loại lỗi, kể cả khi hai máy chạy mức tải khác nhau. Lý do: mỗi chu kỳ lỗi được quy về "lệch bao nhiêu
 lần độ lệch thường" so với chuẩn của chính máy đó. Máy khác loại thì không dùng chung.
 
+## Kiểm chứng độ chính xác ngay tại nhà máy
+
+Không cần mua thêm đồ đo. Công nhân kiểm chi tiết bằng cách quen thuộc ở chuyền (nhìn, dưỡng go/no-go,
+trạm kiểm tra sẵn có) rồi bấm một nút.
+
+| Ở đâu | Làm gì | Dashboard tính ra |
+|---|---|---|
+| Nút trên dashboard (quét QR trên OLED → trang của máy) | Đúng là lỗi / Báo nhầm / Bình thường mới trên từng cảnh báo | Cảnh báo đúng = lỗi thật / cảnh báo đã xác nhận |
+| **Nút NG / OK trên hộp gateway** | NG = đúng là lỗi, OK = báo nhầm, cho cảnh báo mở gần nhất (15 phút). Không có cảnh báo mà bấm NG → "AI bỏ sót" | như trên |
+| "Báo lỗi AI bỏ sót" (dashboard) | Trạm kiểm tra cuối chuyền phát hiện lỗi mà AI không báo → chọn chu kỳ đó | Lỗi AI bắt được = lỗi AI bắt / lỗi đã biết |
+| **"Kiểm tra mẫu NG chuẩn"** | Đầu ca bấm Bắt đầu, cho chạy 1–5 chi tiết lỗi chuẩn từ kho mẫu NG. AI phải bắt hết. Các chu kỳ này không tạo cảnh báo, không dùng để học | Lịch sử "AI bắt 3/3 ✓" |
+
+Tất cả nằm trong tab **Máy và AI tự học → chọn máy → ô "Độ chính xác thực tế tại máy"** (hiện khi máy đang giám sát).
+
+**Đèn trên hộp gateway:** xanh = bình thường · vàng = đang học / chờ duyệt / đang kiểm tra mẫu NG ·
+đỏ nháy = có cảnh báo AI chưa xác nhận · đỏ sáng liền = mất kết nối PLC. Bấm nút → đèn nháy xác nhận.
+
+Phần cứng: `firmware/nut_xac_nhan/nut_xac_nhan.ino` (nút GPIO32/33, LED GPIO25/27, còi GPIO14), nắp hộp có
+2 lỗ nút Ø12 và 3 lỗ LED. Cầu nối USB ↔ MQTT trên laptop:
+
+```
+python tools/nut_bam_bridge.py --serial COM5 --machine M01     # có ESP32
+python tools/nut_bam_bridge.py --ban-phim --machine SIM-EP1    # chưa có ESP32: gõ n = NG, o = OK
+```
+
+**Kết quả kiểm chứng đầy đủ** (so với giới hạn PLC, Isolation Forest, dữ liệu thật Bosch, PLC thật) xem ở tab
+**Kiểm chứng AI** trên dashboard, hoặc `ml/reports/do_tin_cay.md`.
+
 ## Chạy thử không cần PLC (máy mô phỏng)
 
 ```
@@ -94,7 +122,9 @@ và loại đúng chu kỳ có máy báo lỗi (M5 + D110).
 | `gw/01/m/{máy}/learn` (giữ lại) | chế độ, tiến độ học, mô hình đang chạy / chờ duyệt, phiên bản, 25 cảnh báo gần nhất, trạng thái phân loại |
 | `gw/01/m/{máy}/cycle` | mỗi chu kỳ: `y`, `f`, `kind` (learn/preview/score/dq/excluded), `norm`, `score.top`, `alarm_id` |
 | `gw/01/m/{máy}/state` | trạng thái máy (giống cầu nối cũ) |
-| `gw/01/cmd` → `gw/01/ack` | lệnh `{id, op, …}`: add_machine, update_machine, remove_machine, approve, reject, relearn, rollback, retrain_now, feedback, set_ai |
+| `gw/01/m/{máy}/andon` (giữ lại) | màu đèn trên hộp gateway `{color, blink, text}` |
+| `gw/01/m/{máy}/button` → `button_ack` | nút trên hộp gateway gửi `{"label": "fault"\|"false_alarm"}` |
+| `gw/01/cmd` → `gw/01/ack` | lệnh `{id, op, …}`: add_machine, update_machine, remove_machine, approve, reject, relearn, rollback, retrain_now, feedback, set_ai, ng_check_start, ng_check_cancel, report_missed, sim_inject (máy mô phỏng) |
 
 ## Nói gì khi trình bày
 

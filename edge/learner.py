@@ -16,6 +16,7 @@ Khi đang giám sát:
 
 Không bao giờ học từ: chu kỳ máy đang tự báo lỗi, chu kỳ có vấn đề dữ liệu, chu kỳ bị cảnh báo chưa được xác nhận.
 """
+import json
 import time
 from collections import Counter
 
@@ -39,6 +40,7 @@ class Brain:
         self.clf = None
         self.clf_info = {}
         self.last_dq = None
+        self.ng = None            # kiểm tra mẫu NG đang chạy: dict(recipe, expected, items, started)
         self._fit_classifier()
 
     # ───────────── trạng thái theo mã hàng ─────────────
@@ -102,6 +104,18 @@ class Brain:
 
         m = c["active"]
         sc = DT.score(m["body"], f)
+        if self.ng and self.ng["recipe"] in ("*", recipe):
+            # Chu kỳ mẫu NG chuẩn: chấm điểm, ghi kết quả, KHÔNG tạo cảnh báo và KHÔNG bao giờ dùng để học
+            cid = s.add_cycle(self.mid, recipe, ts, f, "monitor", score=sc["norm"], flag=sc["flag"],
+                              model_version=m["version"])
+            s.x("UPDATE cycles SET label='ng_sample' WHERE id=?", (cid,))
+            ng = self.ng
+            ng["items"].append(dict(ts=ts, norm=sc["norm"], flag=sc["flag"], top=sc["top"][:2], cycle_id=cid))
+            ev.update(kind="ng_sample", mode=mode, score=sc, version=m["version"], cycle_id=cid,
+                      ng=dict(done=len(ng["items"]), expected=ng["expected"]))
+            if len(ng["items"]) >= ng["expected"]:
+                ev["ng_result"] = self._finish_ng()
+            return ev
         cid = s.add_cycle(self.mid, recipe, ts, f, "monitor", score=sc["norm"], flag=sc["flag"],
                           model_version=m["version"])
         ev.update(kind="score", mode=mode, score=sc, version=m["version"], cycle_id=cid)
@@ -133,7 +147,7 @@ class Brain:
         """Bản học lại: các chu kỳ giám sát gần nhất không bị cảnh báo + các chu kỳ người xác nhận là bình thường."""
         s, c = self.store, self._rc(recipe)
         ids, X = s.features(self.mid, recipe,
-                            "role='monitor' AND ((flag=0 AND (label IS NULL OR label<>'fault')) "
+                            "role='monitor' AND ((flag=0 AND (label IS NULL OR label NOT IN ('fault','missed','ng_sample'))) "
                             "OR label IN ('false_alarm','new_normal'))")
         ids, X = ids[-self.cfg["drift_window"]:], X[-self.cfg["drift_window"]:]
         c["since"] = 0
@@ -203,7 +217,67 @@ class Brain:
             raise ValueError(f"Chưa đủ {self.cfg['min_drift']} chu kỳ bình thường gần đây để học lại")
         return v
 
-    def feedback(self, alarm_id, label, fault_type=None, all_open=False):
+    # ───────────── kiểm tra mẫu NG chuẩn (đầu ca) ─────────────
+    def start_ng_check(self, recipe="*", expected=3, note=""):
+        """Kỹ sư cho chạy N chi tiết lỗi chuẩn (lấy từ kho mẫu NG). AI phải gắn cờ cả N."""
+        recipe = "*" if recipe in (None, "") else str(recipe)
+        if recipe != "*" and self.mode(recipe) != "monitoring":
+            raise ValueError("Chỉ kiểm tra mẫu NG được khi mã hàng này đang giám sát")
+        if recipe == "*" and not any(self.mode(r) == "monitoring" for r in (self.store.recipes(self.mid) or ["*"])):
+            raise ValueError("Máy chưa ở chế độ giám sát — duyệt chuẩn trước rồi mới kiểm tra mẫu NG")
+        expected = max(1, min(20, int(expected)))
+        self.ng = dict(recipe=recipe, expected=expected, items=[], started=time.time(), note=str(note or "")[:80])
+        return dict(expected=expected)
+
+    def cancel_ng_check(self):
+        out = self._finish_ng(note="Huỷ giữa chừng") if self.ng and self.ng["items"] else None
+        self.ng = None
+        return out
+
+    def _finish_ng(self, note=None):
+        ng, self.ng = self.ng, None
+        if not ng:
+            return None
+        caught = sum(1 for i in ng["items"] if i["flag"])
+        cid = self.store.add_check(self.mid, ng["recipe"], ng["started"], ng["expected"], ng["items"],
+                                   note or ng.get("note", ""))
+        return dict(id=cid, expected=ng["expected"], done=len(ng["items"]), caught=caught,
+                    ok=caught == len(ng["items"]) == ng["expected"])
+
+    # ───────────── AI bỏ sót: chu kỳ không bị cảnh báo nhưng thực ra là lỗi ─────────────
+    def report_missed(self, cycle_id, fault_type=None, source="dashboard"):
+        r = self.store.q("SELECT * FROM cycles WHERE id=? AND machine=?", (int(cycle_id), self.mid), one=True)
+        if not r or r["role"] != "monitor":
+            raise ValueError("Không tìm thấy chu kỳ đang giám sát này")
+        if r["flag"]:
+            raise ValueError("Chu kỳ này AI đã cảnh báo — dùng nút trên cảnh báo đó")
+        m = self._rc(r["recipe"])["active"]
+        top = DT.score(m["body"], json.loads(r["f"]))["top"] if m else []
+        aid = self.store.add_alarm(self.mid, r["recipe"], r["ts"], r["id"], r["score"] or 0.0, top)
+        self.store.resolve_alarm(aid, "missed", (fault_type or "").strip() or None, source)
+        if fault_type:
+            self._fit_classifier()
+        return dict(alarm_id=aid, cycle_id=int(cycle_id))
+
+    # ───────────── độ chính xác thực tế tại máy ─────────────
+    def field_stats(self):
+        week = time.time() - 7 * 86400
+        def pack(cnt):
+            f, fa, nn, mi, op = (cnt.get(k, 0) for k in ("fault", "false_alarm", "new_normal", "missed", "open"))
+            judged = f + fa + nn
+            return dict(fault=f, false_alarm=fa, new_normal=nn, missed=mi, open=op,
+                        precision=(f / judged) if judged else None,       # cảnh báo đúng / cảnh báo đã xác nhận
+                        recall=(f / (f + mi)) if (f + mi) else None)      # lỗi AI bắt / lỗi đã biết
+        checks = self.store.checks(self.mid, 10)
+        return dict(all=pack(self.store.field_counts(self.mid)), week=pack(self.store.field_counts(self.mid, week)),
+                    checks=[dict(id=c["id"], started=c["started"], expected=c["expected"], caught=c["caught"],
+                                 done=len(c["items"]), recipe=c["recipe"], note=c["note"]) for c in checks],
+                    ng_active=(dict(recipe=self.ng["recipe"], expected=self.ng["expected"], done=len(self.ng["items"]),
+                                    started=self.ng["started"]) if self.ng else None),
+                    recent=[dict(id=c["id"], recipe=c["recipe"], ts=c["ts"], norm=c["score"], flag=bool(c["flag"]),
+                                 label=c["label"]) for c in self.store.last_monitor_cycles(self.mid, 12)])
+
+    def feedback(self, alarm_id, label, fault_type=None, all_open=False, source="dashboard"):
         """all_open=True: áp cùng nhãn cho mọi cảnh báo đang mở của mã hàng đó (vd. cả loạt là chế độ mới)."""
         if label not in ("fault", "false_alarm", "new_normal"):
             raise ValueError("Nhãn không hợp lệ")
@@ -217,7 +291,7 @@ class Brain:
                 "SELECT id FROM alarms WHERE machine=? AND recipe=? AND status='open' AND id<>?",
                 (self.mid, a["recipe"], int(alarm_id)))]
         for i in ids:
-            self.store.resolve_alarm(i, label, ft)
+            self.store.resolve_alarm(i, label, ft, source)
         out = dict(alarm_id=int(alarm_id), label=label, applied=len(ids))
         if label == "fault":
             self._fit_classifier()
@@ -313,7 +387,8 @@ class Brain:
                         excluded_error=s.count(self.mid, r, role="excluded", reason_like="machine_error"),
                         excluded_dq=s.count(self.mid, r, role="excluded", reason_like="dq:%"),
                         monitored=s.count(self.mid, r, role="monitor"),
-                        flagged=s.q("SELECT COUNT(*) c FROM cycles WHERE machine=? AND recipe=? AND role='monitor' AND flag=1",
+                        flagged=s.q("SELECT COUNT(*) c FROM cycles WHERE machine=? AND recipe=? AND role='monitor' AND flag=1 "
+                                    "AND (label IS NULL OR label<>'ng_sample')",
                                     (self.mid, r), one=True)["c"],
                         since_retrain=c["since"], retrain_every=self.cfg["retrain_every"])
             for k in ("active", "pending"):
@@ -332,4 +407,4 @@ class Brain:
             out.append(item)
         open_alarms = s.q("SELECT COUNT(*) c FROM alarms WHERE machine=? AND status='open'", (self.mid,), one=True)["c"]
         return dict(machine=self.mid, recipes=out, open_alarms=open_alarms, classifier=self.clf_info,
-                    last_dq=self.last_dq, ai=self.cfg)
+                    last_dq=self.last_dq, ai=self.cfg, field=self.field_stats())

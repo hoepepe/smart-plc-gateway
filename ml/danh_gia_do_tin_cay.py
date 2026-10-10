@@ -196,6 +196,11 @@ def main():
               "Học 300 chu kỳ qua 5 ca (lẫn ~2% chu kỳ lỗi không ai biết). Kiểm tra 400 chu kỳ bình thường và 100 chu kỳ "
               "mỗi loại lỗi, lấy từ 10 ca khác. Lặp 3 lần với hạt giống khác nhau rồi cộng dồn.", ""]
     summary = {}
+    J = dict(sim=[], bosch=[], made=None)        # bản tóm tắt cho dashboard (src/data/do_tin_cay.json)
+
+    def wj(k, n):
+        p_, lo, hi = wilson(k, n)
+        return dict(k=int(k), n=int(n), p=round(p_, 4), lo=round(lo, 4), hi=round(hi, 4))
     for proc, vi in PROCS:
         agg = {}
         for seed in range(3):
@@ -213,6 +218,11 @@ def main():
             lines.append(f"| {'**' + meth + '**' if meth == Gateway.name else meth} | {fmt(*a['fa'])} | "
                          + " | ".join(fmt(*a["det"][f]) for f in faults) + f" | {fmt(tk, tn)} |")
             summary[(vi, meth)] = (a["fa"], (tk, tn))
+        J["sim"].append(dict(machine=vi, methods=[dict(
+            name=meth, fa=wj(*a["fa"]),
+            det=wj(sum(v[0] for v in a["det"].values()), sum(v[1] for v in a["det"].values())),
+            faults=[dict(name=FAULT_VI.get(f, f).split(" —")[0], **wj(*a["det"][f])) for f in faults])
+            for meth, a in agg.items()]))
         lines.append("")
         print("xong", vi)
 
@@ -229,6 +239,9 @@ def main():
         for fb, lab in ((False, "Học một lần rồi để nguyên"), (True, "Học lại theo phản hồi của kỹ sư")):
             for meth, r in bosch_eval(A, meta, feedback=fb).items():
                 a, lo, hi = auc_ci(r["sn"], r["sb"])
+                J["bosch"].append(dict(mode=lab, name=meth, auc=round(a, 3), auc_lo=round(lo, 3), auc_hi=round(hi, 3),
+                                       fa=wj(int((r["sn"] > 1).sum()), len(r["sn"])),
+                                       det=wj(int((r["sb"] > 1).sum()), len(r["sb"]))))
                 lines.append(f"| {lab} | {'**' + meth + '**' if meth == Gateway.name else meth} | {a:.2f} ({lo:.2f}–{hi:.2f}) | "
                              f"{fmt(int((r['sn'] > 1).sum()), len(r['sn']))} | {fmt(int((r['sb'] > 1).sum()), len(r['sb']))} |")
             print("xong Bosch", lab)
@@ -267,6 +280,12 @@ def main():
               ""]
     out = os.path.join(HERE, "reports", "do_tin_cay.md")
     open(out, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    import json
+    import time as _t
+    J["made"] = _t.strftime("%d/%m/%Y")
+    jp = os.path.join(HERE, "..", "src", "data", "do_tin_cay.json")
+    open(jp, "w", encoding="utf-8").write(json.dumps(J, ensure_ascii=False, indent=1))
+    print("Đã ghi", jp)
     print("Đã ghi", out)
 
 

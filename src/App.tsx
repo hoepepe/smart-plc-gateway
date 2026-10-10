@@ -30,7 +30,7 @@ const TABS: { id: TabId; label: string; icon: React.ElementType; title: string; 
   { id: 'fleet', label: 'Máy và AI tự học', icon: BrainCircuit, title: 'Máy và AI tự học',
     sub: 'Mỗi máy tự học chuẩn bình thường của riêng nó, kỹ sư duyệt rồi mới giám sát.' },
   { id: 'oee', label: 'OEE và dừng máy', icon: Gauge, title: 'OEE và dừng máy', sub: 'Độ sẵn sàng × hiệu suất × chất lượng, và nguyên nhân dừng máy xếp theo thời gian mất.' },
-  { id: 'detect', label: 'Phát hiện bất thường', icon: ScanSearch, title: 'Phát hiện bất thường', sub: 'Mô hình đã huấn luyện chấm điểm từng chu kỳ so với dải bình thường.' },
+  { id: 'detect', label: 'Kiểm chứng AI', icon: ScanSearch, title: 'Kiểm chứng độ chính xác AI', sub: 'So với giới hạn PLC trên cùng dữ liệu — mô phỏng 4 loại máy, dữ liệu thật Bosch và PLC thật.' },
   { id: 'connect', label: 'Kết nối và chi phí', icon: Cable, title: 'Kết nối và chi phí', sub: 'Gateway chỉ đọc, không đụng vào máy — và rẻ hơn nhiều so với thay PLC.' },
 ];
 

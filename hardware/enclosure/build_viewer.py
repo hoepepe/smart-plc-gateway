@@ -28,7 +28,7 @@ mods = [dict(name=k, x=x, y=y, L=L, W=W, z=z, desc=d, src=SRC.get(k, ""))
         for k, (x, y, L, W, z, d) in G.MODULES.items()]
 cuts = [dict(side=s, u=u, zc=zc, w=w, h=h, shape=sh, label=n) for s, u, zc, w, h, sh, n in G.CUTS]
 data = dict(pins=G.PINS, IN_L=G.IN_L, IN_W=G.IN_W, IN_H=G.IN_H, WALL=G.WALL, FLOOR=G.FLOOR, PCB_T=G.PCB_T,
-            mods=mods, cuts=cuts, oled=G.OLED)
+            mods=mods, cuts=cuts, oled=G.OLED, buttons=G.BUTTONS, leds=G.LEDS)
 
 SIDE = {"left": "Vách trái", "right": "Vách phải", "front": "Mặt trước", "back": "Mặt sau"}
 CONNECT = {
@@ -44,8 +44,10 @@ cut_rows = "\n".join(
     for c in cuts)
 cut_rows += ('<li><span class="side">Nắp</span><span class="what">2 lỗ kim EN / BOOT</span><span class="dim">Ø3,2</span>'
              '<span class="desc">Reset và vào chế độ nạp ESP32 không cần mở nắp</span></li>'
-             '<li><span class="side">Nắp</span><span class="what">Cửa sổ OLED, 2 LED</span><span class="dim">23 × 13</span>'
-             '<span class="desc">Trạng thái kết nối PLC và cảnh báo AI tại chỗ</span></li>')
+             '<li><span class="side">Nắp</span><span class="what">Cửa sổ OLED, 3 LED</span><span class="dim">23 × 13</span>'
+             '<span class="desc">Mã QR mở trang máy; LED nguồn, kết nối PLC, cảnh báo AI (xanh/vàng/đỏ)</span></li>'
+             '<li><span class="side">Nắp</span><span class="what">2 nút OK / NG</span><span class="dim">Ø12</span>'
+             '<span class="desc">Công nhân xác nhận cảnh báo AI: NG = đúng là lỗi, OK = báo nhầm</span></li>')
 mod_rows = "\n".join(
     f'<li><b>{m["name"]}</b><span class="dim">{m["L"]:g} × {m["W"]:g}</span><span class="desc">{m["src"]}</span></li>'
     for m in mods)
@@ -269,9 +271,17 @@ Cx(acc, -D.WALL - 92, rj.u, rj.zc, 3, 70, mat('lan', 0x2b6cb0), 16);
 const db = D.cuts.find(c => c.label === 'DB9');
 B(acc, -D.WALL - 20, db.u - 16, db.zc - 7, 17, 32, 14, mat('hood', 0x2a2d33));
 Cx(acc, -D.WALL - 90, db.u, db.zc, 3.2, 70, mat('ser', 0x454c57), 16);
-// 2 LED trên nắp
-for (const [lx, col] of [[20, 0x34d058], [30, 0xff9f1c]]) {
-  const led = Cz(lid, lx, D.IN_W - 12, LID_T - 1.5, 2.5, 3.5, mat('l' + col, col, { emissive: col, emissiveIntensity: 0.35, transparent: true, opacity: 0.9 }));
+// 3 LED trên nắp: nguồn, PLC, cảnh báo AI
+D.leds.forEach((l, i) => {
+  const col = [0x34d058, 0x34d058, 0xff9f1c][i] ?? 0x34d058;
+  Cz(lid, l.x, D.IN_W - 12, LID_T - 1.5, 2.5, 3.5, mat('l' + i, col, { emissive: col, emissiveIntensity: 0.35, transparent: true, opacity: 0.9 }));
+});
+// 2 nút OK/NG trên nắp: vành + nắp nút màu
+for (const b of D.buttons) {
+  const col = parseInt(b.color.slice(1), 16);
+  Cz(lid, b.x, b.y, LID_T, 7.5, 1.2, mat('ring' + b.label, 0x2d3748));
+  Cz(lid, b.x, b.y, LID_T + 1.2, 5.6, 3.2, mat('btn' + b.label, col));
+  anchors.push({ obj: lid, p: new THREE.Vector3(b.x, b.y, LID_T + 6), text: b.label === 'NG' ? 'Nút NG: đúng là lỗi' : 'Nút OK: báo nhầm', kind: 'io' });
 }
 anchors.push({ obj: acc, p: new THREE.Vector3(-D.WALL - 92, rj.u, rj.zc + 6), text: 'LAN → switch → PLC + laptop', kind: 'io' });
 anchors.push({ obj: acc, p: new THREE.Vector3(-D.WALL - 90, db.u, db.zc + 6), text: 'RS232 → PLC', kind: 'io' });
@@ -286,7 +296,7 @@ function placeTags() {
   const w = canvas.clientWidth, h = canvas.clientHeight;
   for (const a of anchors) {
     if (!showTags || !a.obj.visible) { a.el.hidden = true; continue; }
-    v.copy(a.p); world.localToWorld(v); v.project(camera);
+    v.copy(a.p); if (a.obj === lid) v.z += lid.position.z; world.localToWorld(v); v.project(camera);
     a.el.hidden = v.z > 1;
     const half = a.el.offsetWidth / 2 + 6;
     const sx = Math.min(Math.max((v.x * 0.5 + 0.5) * w, half), w - half);

@@ -2,12 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Plus, Cpu, WifiOff, CheckCircle2, XCircle, Sparkles, RotateCcw, History, Settings2,
   AlertTriangle, Tag, GraduationCap, ShieldCheck, Activity, Trash2, Terminal,
-  Hammer, Wrench, Drill, Zap, Factory, Wind, type LucideIcon,
+  Hammer, Wrench, Drill, Zap, Factory, Wind, Target, FlaskConical, SearchX, type LucideIcon,
 } from 'lucide-react';
 import { Card, Note, Bar, Spark } from './charts';
 import type { Ack } from '../utils/mqtt';
 import {
-  EdgeState, LearnStatus, RecipeStatus, EdgeAlarm, MachineCfg, Mode, EdgeCycle, Profile,
+  EdgeState, LearnStatus, RecipeStatus, EdgeAlarm, MachineCfg, Mode, EdgeCycle, Profile, FieldCounts,
   MODE_META, ISSUE_VI, KIND_VI, STATUS_VI, machineMode, tsClock, tsDate, recipeLabel, profileOf, low,
 } from '../utils/edge';
 import { AddMachineDialog } from './AddMachineDialog';
@@ -230,6 +230,7 @@ const MachineDetail: React.FC<{ cfg: MachineCfg; p: Profile; st?: LearnStatus; c
           {r.mode === 'learning' && <LearningPanel r={r} p={p} cycles={rc} />}
           {r.mode === 'review' && r.pending && <ReviewPanel r={r} p={p} cycles={rc} base={base} run={run} />}
           {r.mode === 'monitoring' && r.active && <MonitorPanel r={r} p={p} st={st} base={base} run={run} />}
+          {recipes.some((x) => x.mode === 'monitoring') && <FieldPanel st={st} p={p} run={run} machine={cfg.id} sim={cfg.plc.driver === 'simulator'} />}
           <ScorePanel cycles={rc} p={p} mode={r.mode} />
           <AlarmPanel st={st} p={p} recipe={r.recipe} base={base} run={run} />
           <div className="grid xl:grid-cols-2 gap-5">
@@ -431,6 +432,8 @@ function ScorePanel({ cycles, p, mode }: { cycles: EdgeCycle[]; p: Profile; mode
             )}
             {pts.map((c, i) => c.kind === 'dq'
               ? <text key={i} x={x(i)} y={H - P.b - 2} fontSize="9" textAnchor="middle" fill="#94a3b8">×</text>
+              : c.kind === 'ng_sample'
+                ? <rect key={i} x={x(i) - 3.5} y={y(c.norm!) - 3.5} width="7" height="7" fill={c.flag ? '#7c3aed' : '#fff'} stroke="#7c3aed" strokeWidth="1.4"><title>Mẫu NG kiểm tra {c.flag ? '— AI bắt được' : '— AI BỎ SÓT'}</title></rect>
               : <circle key={i} cx={x(i)} cy={y(c.norm!)} r={c.flag ? 3.4 : 2}
                 fill={c.kind === 'preview' ? 'none' : c.flag ? '#e11d48' : '#64748b'}
                 stroke={c.kind === 'preview' ? (c.flag ? '#e11d48' : '#64748b') : 'none'} strokeWidth="1" />)}
@@ -441,6 +444,7 @@ function ScorePanel({ cycles, p, mode }: { cycles: EdgeCycle[]; p: Profile; mode
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-600" /> bị cảnh báo</span>
             <span className="inline-flex items-center gap-1"><span className="w-3 h-0.5 bg-brand-600" /> trung bình trượt</span>
             {dqN > 0 && <span>× lỗi tín hiệu ({dqN})</span>}
+            {pts.some((c) => c.kind === 'ng_sample') && <span className="inline-flex items-center gap-1"><span className="w-2 h-2 bg-violet-600" /> mẫu NG kiểm tra</span>}
           </div>
         </div>
         <div className="space-y-2">
@@ -464,6 +468,7 @@ const ALARM_STATUS: Record<EdgeAlarm['status'], { label: string; cls: string }> 
   fault: { label: 'Đúng là lỗi', cls: 'bg-slate-900 text-white border-slate-900' },
   false_alarm: { label: 'Báo nhầm', cls: 'bg-slate-50 text-slate-600 border-slate-200' },
   new_normal: { label: 'Bình thường mới', cls: 'bg-sky-50 text-sky-800 border-sky-200' },
+  missed: { label: 'AI bỏ sót', cls: 'bg-amber-50 text-amber-900 border-amber-200' },
 };
 
 function AlarmPanel({ st, p, recipe, base, run }: { st: LearnStatus; p: Profile; recipe: string; base: Base; run: Run }) {
@@ -518,6 +523,7 @@ const AlarmRow: React.FC<{ a: EdgeAlarm; p: Profile; known: string[]; base: Base
           <span className="font-mono text-xs text-slate-500 tabular-nums">{tsClock(a.ts)}</span>
           <span className="font-semibold text-slate-900 tabular-nums">điểm {a.norm.toFixed(2)}</span>
           <span className={`text-[11px] px-2 py-0.5 rounded-full border ${s.cls}`}>{s.label}{a.fault_type ? ` · ${a.fault_type}` : ''}</span>
+          {a.source === 'button' && <span className="text-[11px] text-slate-500">· bấm trên hộp gateway</span>}
           {a.suggestion && a.status === 'open' && (
             <span className="text-[11px] text-slate-600">AI đoán: <b>{a.suggestion.type}</b> ({Math.round(a.suggestion.prob * 100)}%)</span>
           )}
@@ -644,6 +650,115 @@ function SettingsPanel({ cfg, p, st, run }: { cfg: MachineCfg; p: Profile; st: L
           <Cpu size={12} /> Lỗi tín hiệu gần nhất {tsClock(st.last_dq.ts)}: {st.last_dq.issues.map((i) => ISSUE_VI[i] ?? i).join(', ')}
         </p>
       )}
+    </Card>
+  );
+}
+
+/* ───────────────────────── độ chính xác thực tế tại máy ───────────────────────── */
+const pctOr = (v: number | null | undefined) => (v == null ? '—' : `${Math.round(v * 100)}%`);
+
+function FieldPanel({ st, p, run, machine, sim }: { st: LearnStatus; p: Profile; run: Run; machine: string; sim: boolean }) {
+  const f = st.field;
+  const [span, setSpan] = useState<'week' | 'all'>('week');
+  const [n, setN] = useState('3');
+  const [missOpen, setMissOpen] = useState(false);
+  const [missId, setMissId] = useState<string>('');
+  const [missType, setMissType] = useState('');
+  if (!f) return null;
+  const c: FieldCounts = f[span];
+  const judged = c.fault + c.false_alarm + c.new_normal;
+  const ng = f.ng_active;
+  const cand = f.recent.filter((x) => !x.flag && x.label == null);
+  return (
+    <Card title={<span className="inline-flex items-center gap-2"><Target size={16} /> Độ chính xác thực tế tại máy</span>}
+      sub="Tính từ xác nhận của công nhân và kỹ sư (nút trên dashboard hoặc nút trên hộp gateway) — không phải từ dữ liệu thử."
+      right={<div className="inline-flex rounded-lg border border-slate-200 p-0.5 text-xs shrink-0" role="tablist">
+        {(['week', 'all'] as const).map((k) => (
+          <button key={k} role="tab" aria-selected={span === k} onClick={() => setSpan(k)}
+            className={`px-2.5 py-1 rounded-md ${span === k ? 'bg-brand-50 text-brand-700 font-medium' : 'text-slate-500'}`}>{k === 'week' ? '7 ngày' : 'Từ đầu'}</button>
+        ))}
+      </div>}>
+      <div className="space-y-5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <Stat label="Cảnh báo đúng" value={pctOr(c.precision)} hint={judged ? `${c.fault}/${judged} cảnh báo đã xác nhận là lỗi thật` : 'chưa có cảnh báo nào được xác nhận'} />
+          <Stat label="Lỗi AI bắt được" value={pctOr(c.recall)} hint={c.fault + c.missed ? `${c.fault}/${c.fault + c.missed} lỗi đã biết · ${c.missed} AI bỏ sót` : 'chưa có lỗi nào được ghi nhận'} />
+          <Stat label="Báo nhầm" value={c.false_alarm} hint={c.new_normal ? `+ ${c.new_normal} chế độ bình thường mới` : 'cảnh báo bị đánh dấu nhầm'} />
+          <Stat label="Chưa xác nhận" value={c.open} hint="cảnh báo đang chờ người kiểm" />
+        </div>
+
+        <div className="grid lg:grid-cols-2 gap-5">
+          <div className="border border-slate-200 rounded-lg p-4">
+            <div className="text-sm font-medium text-slate-900 inline-flex items-center gap-2"><FlaskConical size={15} /> Kiểm tra mẫu NG chuẩn</div>
+            <p className="text-xs text-slate-500 mt-1 leading-relaxed">Đầu ca, cho máy chạy vài chi tiết lỗi chuẩn lấy từ kho mẫu NG. AI phải bắt hết.
+              Các {p.cycle} này không tạo cảnh báo và không bao giờ được dùng để học.</p>
+            {ng ? (
+              <div className="mt-3 bg-violet-50 border border-violet-200 rounded-md px-3 py-2.5 text-sm text-violet-900">
+                Đang chờ mẫu NG <b className="tabular-nums">{ng.done}/{ng.expected}</b> — cho máy chạy chi tiết lỗi chuẩn bây giờ.
+                <button onClick={() => run('ng_check_cancel', { machine }, 'Đã dừng kiểm tra')} className="ml-2 text-xs underline">Huỷ</button>
+                {sim && (
+                  <button onClick={() => run('sim_inject', { machine, count: ng.expected - ng.done }, 'Máy mô phỏng sẽ chạy chi tiết lỗi')}
+                    className="ml-2 text-xs font-medium bg-violet-700 text-white rounded px-2 py-1 hover:bg-violet-800">Mô phỏng: chạy {ng.expected - ng.done} chi tiết lỗi</button>
+                )}
+              </div>
+            ) : (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <label className="text-xs text-slate-600" htmlFor={`ng-${machine}`}>Số mẫu</label>
+                <select id={`ng-${machine}`} value={n} onChange={(e) => setN(e.target.value)} className="border border-slate-300 rounded-md px-2 py-1.5 text-sm">
+                  {[1, 2, 3, 4, 5].map((k) => <option key={k} value={k}>{k}</option>)}
+                </select>
+                <button onClick={() => run('ng_check_start', { machine, recipe: '*', expected: Number(n) }, `Chờ ${n} mẫu NG`)}
+                  className="text-xs font-medium bg-brand-600 text-white rounded-md px-3 py-1.5 hover:bg-brand-700">Bắt đầu kiểm tra</button>
+              </div>
+            )}
+            {f.checks.length > 0 && (
+              <ul className="mt-3 space-y-1.5 text-xs">
+                {f.checks.slice(0, 5).map((k) => {
+                  const ok = k.caught === k.expected && k.done === k.expected;
+                  return (
+                    <li key={k.id} className="flex items-center justify-between gap-2">
+                      <span className="text-slate-500 tabular-nums">{tsDate(k.started)}{k.note ? ` · ${k.note}` : ''}</span>
+                      <span className={`rounded-full px-2 py-0.5 border tabular-nums ${ok ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-rose-50 text-rose-800 border-rose-200'}`}>
+                        AI bắt {k.caught}/{k.done}{k.done < k.expected ? ` (dừng ở ${k.done}/${k.expected})` : ''}{ok ? ' ✓' : ''}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          <div className="border border-slate-200 rounded-lg p-4">
+            <div className="text-sm font-medium text-slate-900 inline-flex items-center gap-2"><SearchX size={15} /> Báo lỗi AI bỏ sót</div>
+            <p className="text-xs text-slate-500 mt-1 leading-relaxed">Trạm kiểm tra cuối chuyền hay công nhân phát hiện một chi tiết lỗi mà AI không cảnh báo?
+              Chọn {p.cycle} đó để tính vào "Lỗi AI bắt được". Trên hộp gateway: bấm nút NG khi không có cảnh báo nào đang mở.</p>
+            {!missOpen ? (
+              <button onClick={() => { setMissOpen(true); setMissId(cand[0] ? String(cand[0].id) : ''); }} disabled={!cand.length}
+                className="mt-3 text-xs border border-amber-300 text-amber-900 rounded-md px-3 py-1.5 hover:bg-amber-50 disabled:opacity-50">
+                Ghi một lỗi AI bỏ sót</button>
+            ) : (
+              <form className="mt-3 flex flex-wrap gap-2 items-end" onSubmit={(e) => {
+                e.preventDefault();
+                if (!missId) return;
+                run('report_missed', { machine, cycle_id: Number(missId), fault_type: missType.trim() || null }, 'Đã ghi lỗi AI bỏ sót');
+                setMissOpen(false); setMissType('');
+              }}>
+                <label className="text-xs text-slate-600" htmlFor={`mi-${machine}`}>{cap(p.cycle)}
+                  <select id={`mi-${machine}`} value={missId} onChange={(e) => setMissId(e.target.value)} className="mt-1 block border border-slate-300 rounded-md px-2 py-1.5 text-sm">
+                    {cand.map((x) => <option key={x.id} value={x.id}>{tsClock(x.ts)} · điểm {x.norm?.toFixed(2) ?? '—'}{x.recipe !== '*' ? ` · ${x.recipe}` : ''}</option>)}
+                  </select>
+                </label>
+                <label className="text-xs text-slate-600" htmlFor={`mt-${machine}`}>Loại lỗi
+                  <input id={`mt-${machine}`} list={`mtl-${machine}`} value={missType} onChange={(e) => setMissType(e.target.value)}
+                    placeholder={p.faults[0] ?? 'vd. Thiếu phôi'} className="mt-1 block border border-slate-300 rounded-md px-2 py-1.5 text-sm w-44" />
+                  <datalist id={`mtl-${machine}`}>{p.faults.map((k) => <option key={k} value={k} />)}</datalist>
+                </label>
+                <button type="submit" className="text-xs font-medium bg-brand-600 text-white rounded-md px-3 py-2 hover:bg-brand-700">Lưu</button>
+                <button type="button" onClick={() => setMissOpen(false)} className="text-xs text-slate-500 px-1 py-2">Huỷ</button>
+              </form>
+            )}
+          </div>
+        </div>
+      </div>
     </Card>
   );
 }

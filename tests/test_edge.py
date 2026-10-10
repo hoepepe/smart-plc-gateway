@@ -157,3 +157,25 @@ def test_old_model_still_scores_new_features():
     s = DT.score(old, X[0])
     assert np.isfinite(s["norm"]) and len(s["top"]) == 3
     assert DT.shift(old, DT.train(X)) >= 0
+
+
+def test_field_accuracy_missed_and_ng_check():
+    """Độ chính xác thực tế: cảnh báo đúng / báo nhầm / AI bỏ sót; kiểm tra mẫu NG đầu ca."""
+    b = new_brain()
+    learn4(b); b.approve("*")
+    evs = feed(b, stream("PRESS_FORCE", 20, 7))
+    ok_cycle = [e for e in evs if e["kind"] == "score" and not e["score"]["flag"]][-1]["cycle_id"]
+    al = [e["alarm_id"] for e in feed(b, stream("PRESS_FORCE", 3, 30, fault="MISSING_PART")) if e.get("alarm_id")]
+    b.feedback(al[0], "fault", "Thiếu chi tiết")
+    b.report_missed(ok_cycle, "Lệch vị trí")                     # công nhân thấy lỗi mà AI không báo
+    fs = b.status()["field"]["all"]
+    assert fs["fault"] == 1 and fs["missed"] == 1 and fs["recall"] == 0.5 and fs["precision"] == 1.0
+    # mẫu NG đầu ca: 3 chi tiết thiếu → AI phải bắt cả 3, không tạo cảnh báo, không dùng để học
+    b.start_ng_check("*", 3)
+    evs = feed(b, stream("PRESS_FORCE", 3, 31, fault="MISSING_PART"))
+    assert evs[-1]["ng_result"]["caught"] == 3 and evs[-1]["ng_result"]["ok"]
+    assert not any(e.get("alarm_id") for e in evs) and b.ng is None
+    st = b.status()["field"]
+    assert st["checks"][0]["caught"] == 3 and st["ng_active"] is None
+    _, X = b.store.features("M01", "*", "label='ng_sample'")
+    assert len(X) == 3

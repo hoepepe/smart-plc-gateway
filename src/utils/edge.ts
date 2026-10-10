@@ -26,8 +26,22 @@ export interface TopFeature { feature: string; vi: string; z: number; value: num
 
 export interface EdgeAlarm {
   id: number; machine: string; recipe: string; ts: number; cycle_id: number; norm: number;
-  top: TopFeature[]; status: 'open' | 'fault' | 'false_alarm' | 'new_normal';
+  top: TopFeature[]; status: 'open' | 'fault' | 'false_alarm' | 'new_normal' | 'missed';
   fault_type: string | null; suggestion: { type: string; prob: number } | null; resolved: number | null;
+  source?: string | null;
+}
+
+export interface FieldCounts {
+  fault: number; false_alarm: number; new_normal: number; missed: number; open: number;
+  precision: number | null; recall: number | null;
+}
+
+/** Độ chính xác thực tế tại máy — tính từ xác nhận của người vận hành, không phải từ dữ liệu thử. */
+export interface FieldStats {
+  all: FieldCounts; week: FieldCounts;
+  checks: { id: number; started: number; expected: number; caught: number; done: number; recipe: string; note: string }[];
+  ng_active: { recipe: string; expected: number; done: number; started: number } | null;
+  recent: { id: number; recipe: string; ts: number; norm: number | null; flag: boolean; label: string | null }[];
 }
 
 export interface LearnStatus {
@@ -40,6 +54,7 @@ export interface LearnStatus {
   ai: { learn_target: number; retrain_every: number; auto_approve: boolean; [k: string]: unknown };
   conn: { ok: boolean; msg: string; ts?: number }; state: string | null;
   cycles_seen: number; ts: number; alarms: EdgeAlarm[];
+  field?: FieldStats;
 }
 
 export interface Profile {
