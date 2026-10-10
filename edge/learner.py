@@ -1,0 +1,290 @@
+"""
+learner.py — "Bộ não" của một máy: tự học chuẩn bình thường tại chỗ, giám sát, nhận phản hồi, học lại.
+
+Vòng đời cho MỖI mã hàng (recipe) của MỖI máy:
+
+    ĐANG HỌC ──(đủ N chu kỳ)──▶ CHỜ DUYỆT ──(kỹ sư bấm Kích hoạt)──▶ ĐANG GIÁM SÁT
+        ▲                           │ Học lại                              │
+        └───────────────────────────┴──────────────────────────────────────┘ (Học lại từ đầu)
+
+Khi đang giám sát:
+  - Chu kỳ vượt ngưỡng → cảnh báo, kèm 3 đặc trưng lệch nhiều nhất và gợi ý loại lỗi (nếu đã đủ nhãn).
+  - Phản hồi trên mỗi cảnh báo: Đúng là lỗi (ghi loại lỗi) / Báo nhầm / Bình thường mới.
+  - Cứ mỗi `retrain_every` chu kỳ: tạo bản học lại từ các chu kỳ gần nhất KHÔNG bị cảnh báo và không bị đánh dấu lỗi
+    → bản chờ duyệt, kèm độ dịch chuẩn so với bản đang chạy VÀ so với bản gốc (để lộ ra hao mòn từ từ).
+  - Mọi bản đều được giữ lại để quay về (rollback).
+
+Không bao giờ học từ: chu kỳ máy đang tự báo lỗi, chu kỳ có vấn đề dữ liệu, chu kỳ bị cảnh báo chưa được xác nhận.
+"""
+import time
+from collections import Counter
+
+import numpy as np
+
+from . import detector as DT
+
+DEFAULTS = dict(learn_target=300, retrain_every=500, drift_window=300, min_drift=50,
+                new_normal_min=10, auto_approve=False, shift_warn=1.0,
+                clf_min_total=10, clf_min_per_type=3)
+
+
+class Brain:
+    def __init__(self, mid, cfg, store):
+        self.mid = mid
+        self.cfg = {**DEFAULTS, **(cfg.get("ai") or {})}
+        self.store = store
+        self.cache = {}
+        self.clf = None
+        self.clf_info = {}
+        self.last_dq = None
+        self._fit_classifier()
+
+    # ───────────── trạng thái theo mã hàng ─────────────
+    def _rc(self, recipe):
+        if recipe not in self.cache:
+            self._reload(recipe)
+        return self.cache[recipe]
+
+    def _reload(self, recipe):
+        s = self.store
+        active = s.model(self.mid, recipe, status="active")
+        pending = s.model(self.mid, recipe, status="pending")
+        origin = None
+        ms = [m for m in s.models(self.mid, recipe) if m["status"] != "rejected"]
+        if ms:
+            origin = s.model(self.mid, recipe, version=ms[0]["version"])
+        prev = self.cache.get(recipe, {})
+        self.cache[recipe] = dict(active=active, pending=pending, origin=origin,
+                                  since=prev.get("since", 0))
+
+    def mode(self, recipe):
+        c = self._rc(recipe)
+        if c["active"]:
+            return "monitoring"
+        if c["pending"]:
+            return "review"
+        return "learning"
+
+    # ───────────── xử lý một chu kỳ ─────────────
+    def on_cycle(self, f, ts=None, recipe="*", machine_error=False, dq=None):
+        ts = ts or time.time()
+        recipe = "*" if recipe in (None, "") else str(recipe)
+        s, c = self.store, self._rc(recipe)
+        ev = dict(machine=self.mid, recipe=recipe, ts=ts)
+
+        if dq:
+            self.last_dq = dict(ts=ts, issues=dq)
+            s.add_cycle(self.mid, recipe, ts, f, "excluded", reason="dq:" + ",".join(dq))
+            return {**ev, "kind": "dq", "issues": dq, "mode": self.mode(recipe)}
+        if machine_error:
+            s.add_cycle(self.mid, recipe, ts, f, "excluded", reason="machine_error")
+            return {**ev, "kind": "excluded", "reason": "machine_error", "mode": self.mode(recipe)}
+
+        mode = self.mode(recipe)
+        if mode == "learning":
+            s.add_cycle(self.mid, recipe, ts, f, "learn")
+            n = s.count(self.mid, recipe, role="learn")
+            ev.update(kind="learn", n=n, target=self.cfg["learn_target"])
+            if n >= self.cfg["learn_target"]:
+                v = self._train_initial(recipe)
+                ev.update(trained=v, mode=self.mode(recipe))
+            else:
+                ev["mode"] = "learning"
+            return ev
+
+        if mode == "review":
+            sc = DT.score(c["pending"]["body"], f)
+            s.add_cycle(self.mid, recipe, ts, f, "hold", score=sc["norm"], flag=sc["flag"],
+                        model_version=c["pending"]["version"])
+            return {**ev, "kind": "preview", "mode": mode, "score": sc, "version": c["pending"]["version"]}
+
+        m = c["active"]
+        sc = DT.score(m["body"], f)
+        cid = s.add_cycle(self.mid, recipe, ts, f, "monitor", score=sc["norm"], flag=sc["flag"],
+                          model_version=m["version"])
+        ev.update(kind="score", mode=mode, score=sc, version=m["version"], cycle_id=cid)
+        if sc["flag"]:
+            sug = self.suggest(f)
+            ev["alarm_id"] = s.add_alarm(self.mid, recipe, ts, cid, sc["norm"], sc["top"], sug)
+            ev["suggestion"] = sug
+        c["since"] += 1
+        if c["since"] >= self.cfg["retrain_every"] and not c["pending"]:
+            v = self._candidate(recipe, kind="drift")
+            if v:
+                ev["candidate"] = v
+        return ev
+
+    # ───────────── huấn luyện ─────────────
+    def _train_initial(self, recipe):
+        ids, X = self.store.features(self.mid, recipe, "role='learn'")
+        body = DT.train(X, recipe)
+        body["source_cycles"] = [ids[0], ids[-1]]
+        note = (f"Học từ {len(X)} chu kỳ đầu tiên (tự bỏ {body['n_dropped']} chu kỳ nghi lỗi) · "
+                f"ngưỡng chọn ở phân vị {DT.PCT} trên {body['n_calib']} chu kỳ hiệu chuẩn")
+        v = self.store.add_model(self.mid, recipe, body, "initial", note)
+        self._reload(recipe)
+        if self.cfg["auto_approve"]:
+            self.approve(recipe)
+        return v
+
+    def _candidate(self, recipe, kind, extra_note=""):
+        """Bản học lại: các chu kỳ giám sát gần nhất không bị cảnh báo + các chu kỳ người xác nhận là bình thường."""
+        s, c = self.store, self._rc(recipe)
+        ids, X = s.features(self.mid, recipe,
+                            "role='monitor' AND ((flag=0 AND (label IS NULL OR label<>'fault')) "
+                            "OR label IN ('false_alarm','new_normal'))")
+        ids, X = ids[-self.cfg["drift_window"]:], X[-self.cfg["drift_window"]:]
+        c["since"] = 0
+        if len(X) < self.cfg["min_drift"]:
+            return None
+        body = DT.train(X, recipe)
+        body["source_cycles"] = [ids[0], ids[-1]]
+        sh = DT.shift(c["active"]["body"], body) if c["active"] else 0.0
+        sh0 = DT.shift(c["origin"]["body"], body) if c["origin"] else 0.0
+        body["shift"], body["shift_origin"] = round(sh, 3), round(sh0, 3)
+        why = {"drift": "Học lại định kỳ", "new_normal": "Thêm chế độ bình thường mới"}.get(kind, "Học lại")
+        note = (f"{why} trên {len(X)} chu kỳ gần nhất · chuẩn dịch {sh:.2f}σ so với bản đang chạy, "
+                f"{sh0:.2f}σ so với bản gốc{extra_note}")
+        v = s.add_model(self.mid, recipe, body, kind, note)
+        self._reload(recipe)
+        if self.cfg["auto_approve"] and sh < self.cfg["shift_warn"] and sh0 < 2 * self.cfg["shift_warn"]:
+            self.approve(recipe)
+        return v
+
+    # ───────────── lệnh từ dashboard ─────────────
+    def approve(self, recipe):
+        c = self._rc(recipe)
+        if not c["pending"]:
+            raise ValueError("Không có bản nào đang chờ duyệt")
+        if c["active"]:
+            self.store.set_model_status(self.mid, recipe, c["active"]["version"], "retired")
+        self.store.set_model_status(self.mid, recipe, c["pending"]["version"], "active")
+        c["since"] = 0
+        self._reload(recipe)
+        a = self.cache[recipe]["active"]
+        return a["version"] if a else None
+
+    def reject(self, recipe):
+        c = self._rc(recipe)
+        if not c["pending"]:
+            raise ValueError("Không có bản nào đang chờ duyệt")
+        self.store.set_model_status(self.mid, recipe, c["pending"]["version"], "rejected")
+        if not c["active"]:
+            self.store.set_role(self.mid, recipe, "learn", "discarded")   # học lại từ đầu
+        self._reload(recipe)
+
+    def relearn(self, recipe):
+        c = self._rc(recipe)
+        for k in ("active", "pending"):
+            if c[k]:
+                self.store.set_model_status(self.mid, recipe, c[k]["version"], "retired" if k == "active" else "rejected")
+        self.store.set_role(self.mid, recipe, "learn", "discarded")
+        c["since"] = 0
+        self._reload(recipe)
+
+    def rollback(self, recipe, version):
+        m = self.store.model(self.mid, recipe, version=int(version))
+        if not m or m["status"] in ("pending", "rejected"):
+            raise ValueError("Chỉ quay về được bản đã từng chạy")
+        c = self._rc(recipe)
+        if c["active"]:
+            self.store.set_model_status(self.mid, recipe, c["active"]["version"], "retired")
+        self.store.set_model_status(self.mid, recipe, int(version), "active")
+        self._reload(recipe)
+
+    def retrain_now(self, recipe):
+        if self.mode(recipe) != "monitoring":
+            raise ValueError("Máy chưa ở chế độ giám sát")
+        v = self._candidate(recipe, kind="drift", extra_note=" · kỹ sư yêu cầu")
+        if not v:
+            raise ValueError(f"Chưa đủ {self.cfg['min_drift']} chu kỳ bình thường gần đây để học lại")
+        return v
+
+    def feedback(self, alarm_id, label, fault_type=None, all_open=False):
+        """all_open=True: áp cùng nhãn cho mọi cảnh báo đang mở của mã hàng đó (vd. cả loạt là chế độ mới)."""
+        if label not in ("fault", "false_alarm", "new_normal"):
+            raise ValueError("Nhãn không hợp lệ")
+        a = self.store.alarm(int(alarm_id))
+        if not a or a["machine"] != self.mid:
+            raise ValueError("Không tìm thấy cảnh báo")
+        ft = (fault_type or "").strip() or None
+        ids = [int(alarm_id)]
+        if all_open:
+            ids += [r["id"] for r in self.store.q(
+                "SELECT id FROM alarms WHERE machine=? AND recipe=? AND status='open' AND id<>?",
+                (self.mid, a["recipe"], int(alarm_id)))]
+        for i in ids:
+            self.store.resolve_alarm(i, label, ft)
+        out = dict(alarm_id=int(alarm_id), label=label, applied=len(ids))
+        if label == "fault":
+            self._fit_classifier()
+            out["classifier"] = self.clf_info
+        if label == "new_normal":
+            n = self.store.q("""SELECT COUNT(*) c FROM cycles WHERE machine=? AND recipe=? AND label='new_normal'
+                                AND id > COALESCE((SELECT MAX(json_extract(body,'$.source_cycles[1]')) FROM models
+                                WHERE machine=? AND recipe=? AND status IN ('active','pending')),0)""",
+                             (self.mid, a["recipe"], self.mid, a["recipe"]), one=True)["c"]
+            out["new_normal_count"] = n
+            if n >= self.cfg["new_normal_min"] and not self._rc(a["recipe"])["pending"]:
+                out["candidate"] = self._candidate(a["recipe"], kind="new_normal")
+                if not out["candidate"]:
+                    out["note"] = f"Cần ít nhất {self.cfg['min_drift']} chu kỳ bình thường gần đây để tạo bản học lại"
+            elif n < self.cfg["new_normal_min"]:
+                out["note"] = f"Đã có {n}/{self.cfg['new_normal_min']} chu kỳ bình thường mới — đủ thì tự tạo bản học lại"
+        return out
+
+    # ───────────── phân loại lỗi (khi đã đủ nhãn) ─────────────
+    def _fit_classifier(self):
+        X, y = self.store.labeled_faults(self.mid)
+        cnt = Counter(y)
+        types = {k: v for k, v in cnt.items() if v >= self.cfg["clf_min_per_type"]}
+        ready = len(y) >= self.cfg["clf_min_total"] and len(types) >= 2
+        self.clf_info = dict(n=len(y), types=dict(cnt), need_total=self.cfg["clf_min_total"],
+                             need_per_type=self.cfg["clf_min_per_type"], ready=ready)
+        self.clf = None
+        if ready:
+            from sklearn.ensemble import RandomForestClassifier
+            keep = [i for i, t in enumerate(y) if t in types]
+            Xa, ya = np.asarray(X)[keep], [y[i] for i in keep]
+            self.clf = RandomForestClassifier(n_estimators=150, random_state=0, class_weight="balanced").fit(Xa, ya)
+
+    def suggest(self, f):
+        if self.clf is None:
+            return None
+        p = self.clf.predict_proba([f])[0]
+        i = int(np.argmax(p))
+        return dict(type=str(self.clf.classes_[i]), prob=round(float(p[i]), 2))
+
+    # ───────────── trạng thái cho dashboard ─────────────
+    def status(self):
+        s = self.store
+        recipes = s.recipes(self.mid) or ["*"]
+        out = []
+        for r in recipes:
+            c = self._rc(r)
+            mode = self.mode(r)
+            item = dict(recipe=r, mode=mode,
+                        learned=s.count(self.mid, r, role="learn"), target=self.cfg["learn_target"],
+                        excluded_error=s.count(self.mid, r, role="excluded", reason_like="machine_error"),
+                        excluded_dq=s.count(self.mid, r, role="excluded", reason_like="dq:%"),
+                        monitored=s.count(self.mid, r, role="monitor"),
+                        flagged=s.q("SELECT COUNT(*) c FROM cycles WHERE machine=? AND recipe=? AND role='monitor' AND flag=1",
+                                    (self.mid, r), one=True)["c"],
+                        since_retrain=c["since"], retrain_every=self.cfg["retrain_every"])
+            for k in ("active", "pending"):
+                m = c[k]
+                if m:
+                    b = m["body"]
+                    item[k] = dict(version=m["version"], kind=m["kind"], note=m["note"], created=m["created"],
+                                   n_train=b["n_train"], n_calib=b["n_calib"], n_dropped=b.get("n_dropped", 0),
+                                   calib_false_alarm=b.get("calib_false_alarm"),
+                                   t_maha=round(b["t_maha"], 3), t_robz=round(b["t_robz"], 3),
+                                   duration_med=round(b.get("duration_med", 0), 2),
+                                   shift=b.get("shift"), shift_origin=b.get("shift_origin"),
+                                   warn=(b.get("shift") or 0) >= self.cfg["shift_warn"])
+            item["versions"] = [dict(version=m["version"], status=m["status"], kind=m["kind"], note=m["note"],
+                                     created=m["created"]) for m in s.models(self.mid, r)]
+            out.append(item)
+        open_alarms = s.q("SELECT COUNT(*) c FROM alarms WHERE machine=? AND status='open'", (self.mid,), one=True)["c"]
+        return dict(machine=self.mid, recipes=out, open_alarms=open_alarms, classifier=self.clf_info,
+                    last_dq=self.last_dq, ai=self.cfg)

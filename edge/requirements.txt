@@ -1,0 +1,4 @@
+numpy
+scikit-learn
+paho-mqtt>=2.0
+pymcprotocol

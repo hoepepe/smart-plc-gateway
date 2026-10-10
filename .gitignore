@@ -15,3 +15,6 @@ __pycache__/
 
 # Dữ liệu tải về/sinh ra từ bộ dữ liệu công khai (kiểm tra giấy phép trước khi đưa lên repo)
 ml/data/
+
+# Dữ liệu runtime edge (chu kỳ, mô hình theo máy) — mỗi gateway một bản riêng
+edge_data/

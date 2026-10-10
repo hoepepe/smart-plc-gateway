@@ -42,6 +42,10 @@ ml/
   gateway_sim.py         Giả lập gateway, phát MQTT đúng schema của gateway thật
   legacy_nhan_dien_tin_hieu/   Hướng cũ: AI đoán dây — xem README trong đó
 
+edge/                    AI tự học tại chỗ: runtime nhiều máy, học → duyệt → giám sát, phiên bản, phản hồi
+  runtime.py             python -m edge.runtime — đọc PLC/mô phỏng, chấm điểm, MQTT gw/{gw}/...
+  learner.py detector.py quality.py store.py config.py sources.py
+
 backend/
   main.py                Nhận MQTT → SQLite → REST API, tính OEE và nguyên nhân dừng máy
 ```
@@ -114,6 +118,18 @@ Mở giao diện: góc trên đổi thành **Đã nối gateway**. API máy ch�
 | `GET /api/machines/{id}/cycles` | Chu kỳ gần đây, lọc được chu kỳ bất thường |
 | `GET /api/machines/{id}/oee` | OEE một máy |
 | `GET /api/stops` | Nguyên nhân dừng máy, xếp theo thời gian mất |
+
+### AI tự học tại chỗ cho từng máy (tab "Máy và AI tự học")
+
+Mỗi máy tự học chuẩn bình thường của chính nó ngay trên gateway, kỹ sư duyệt rồi mới giám sát, bấm phản hồi trên từng cảnh báo để AI học tiếp. Chi tiết: [docs/HuongDan_AI_TuHoc.md](docs/HuongDan_AI_TuHoc.md).
+
+```bash
+pip install -r edge/requirements.txt
+python -m edge.runtime --demo                      # 3 máy mô phỏng, không cần PLC
+python -m edge.runtime --add-plc 192.168.1.39:3000 # PLC Mitsubishi thật, chỉ đọc
+npm run dev                                         # mở tab "Máy và AI tự học"
+python -m pytest tests/test_edge.py                 # 6 bài kiểm thử vòng đời
+```
 
 ---
 

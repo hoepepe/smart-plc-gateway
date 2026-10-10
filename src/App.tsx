@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, Gauge, ScanSearch, Cable, Lock, Radio } from 'lucide-react';
+import { Activity, Gauge, ScanSearch, Cable, Lock, Radio, BrainCircuit } from 'lucide-react';
 import { MachineRuntime } from './types';
 import { MACHINES } from './data/machines';
 import { proc } from './utils/detector';
@@ -7,7 +7,10 @@ import {
   initRuntime, prefill, step, clock,
   applyExternalState, applyExternalCycle, accrueAll,
 } from './utils/sim';
-import { connectMqtt, ConnStatus } from './utils/mqtt';
+import { connectMqtt, ConnStatus, MqttConn, Ack } from './utils/mqtt';
+import { EdgeState, emptyEdge, pushCycle } from './utils/edge';
+import sampleEdge from './data/edge_sample.json';
+import { FleetTab } from './components/FleetTab';
 import { MonitorTab } from './components/MonitorTab';
 import { OeeTab } from './components/OeeTab';
 import { DetectionTab } from './components/DetectionTab';
@@ -18,10 +21,11 @@ const MQTT_URL = (import.meta as any).env?.VITE_MQTT_URL || 'ws://localhost:9001
 const GW_ID = '01';
 const TICK_MS = 250;
 
-type TabId = 'monitor' | 'oee' | 'detect' | 'connect';
+type TabId = 'monitor' | 'fleet' | 'oee' | 'detect' | 'connect';
 
 const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
   { id: 'monitor', label: 'Giám sát máy', icon: Activity },
+  { id: 'fleet', label: 'Máy và AI tự học', icon: BrainCircuit },
   { id: 'oee', label: 'OEE và dừng máy', icon: Gauge },
   { id: 'detect', label: 'Phát hiện bất thường', icon: ScanSearch },
   { id: 'connect', label: 'Kết nối và chi phí', icon: Cable },
@@ -54,6 +58,11 @@ export default function App() {
   const [conn, setConn] = useState<ConnStatus>('connecting');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const connRef = useRef<ConnStatus>('connecting');
+  // Trạng thái runtime edge (AI tự học tại chỗ) — cập nhật tại chỗ, vẽ lại theo nhịp `tick`
+  const edgeRef = useRef<EdgeState>(emptyEdge());
+  const mqttRef = useRef<MqttConn | null>(null);
+  const send = useCallback(async (op: string, body?: Record<string, unknown>): Promise<Ack> =>
+    mqttRef.current ? mqttRef.current.send(op, body) : { id: '', ok: false, error: 'Chưa nối gateway' }, []);
 
   const notify = useCallback((type: ToastMessage['type'], title: string, description?: string) => {
     const id = Math.random().toString(36).slice(2);
@@ -88,11 +97,19 @@ export default function App() {
         if (r) applyExternalState(r, p.state, nowRef.current, p.errorCode);
       },
       onCycle: (id, p) => {
+        if (p.kind) { pushCycle(edgeRef.current, id, p); return; }   // bản tin từ runtime edge
         const m = MACHINES.find((x) => x.id === id);
         const r = rtRef.current![id];
-        if (m && r) applyExternalCycle(m, r, nowRef.current, p.y, p.f);
+        if (m && r && p.f?.length === 9) applyExternalCycle(m, r, nowRef.current, p.y, p.f);
       },
+      onLearn: (id, p) => {
+        if (p) edgeRef.current.learn[id] = p;
+        else { delete edgeRef.current.learn[id]; delete edgeRef.current.cycles[id]; }
+      },
+      onRegistry: (p) => { edgeRef.current.registry = p; },
+      onOnline: (on) => { edgeRef.current.online = on; },
     });
+    mqttRef.current = c;
     return () => c.disconnect();
   }, [notify]);
 
@@ -168,6 +185,10 @@ export default function App() {
         {tab === 'monitor' && (
           <MonitorTab rt={rt} now={now} selected={selected} onSelect={setSelected}
             onInjectFault={injectFault} onForceStop={forceStop} live={conn === 'connected'} />
+        )}
+        {tab === 'fleet' && (
+          <FleetTab edge={conn === 'demo' ? (sampleEdge as unknown as EdgeState) : edgeRef.current}
+            connected={conn === 'connected'} sample={conn === 'demo'} send={send} notify={notify} />
         )}
         {tab === 'oee' && <OeeTab rt={rt} now={now} />}
         {tab === 'detect' && <DetectionTab />}
