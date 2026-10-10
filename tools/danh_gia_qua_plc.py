@@ -43,6 +43,10 @@ def main():
     else:
         thr = None
 
+    # Khi phát lại có --limit N, chỉ N tag đầu được phát: bỏ các tag sau tag lớn nhất nhận được
+    if got:
+        last = max(t for t in got if t in truth) if any(t in truth for t in got) else 0
+        truth = {t: r for t, r in truth.items() if t <= last}
     both = sorted(set(truth) & set(got))
     missing = sorted(set(truth) - set(got))
     extra = sorted(set(got) - set(truth))
