@@ -48,14 +48,14 @@ export function MonitorTab({ rt, now, selected, onSelect, onInjectFault, onForce
           const lastC = rr.cycles[rr.cycles.length - 1];
           return (
             <button key={mc.id} onClick={() => onSelect(mc.id)}
-              className={`text-left bg-white border rounded-lg p-4 transition-all shadow-xs ${
-                on ? 'border-slate-900 ring-2 ring-slate-900/10' : 'border-slate-200 hover:border-slate-300'}`}>
+              className={`text-left bg-white border rounded-xl p-4 transition-all shadow-card ${
+                on ? 'border-brand-500 ring-2 ring-brand-500/15' : 'border-slate-200 hover:border-slate-300'}`}>
               <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="text-[11px] font-mono text-slate-400">{mc.id} · {mc.line}</div>
+                <div className="min-w-0">
+                  <div className="text-[11px] font-mono text-slate-400 truncate">{mc.id} · {mc.line}</div>
                   <div className="text-sm font-semibold text-slate-900 mt-0.5">{mc.name}</div>
                 </div>
-                <span className={`flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full ${st.bg} ${st.color}`}>
+                <span className={`shrink-0 whitespace-nowrap flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full ${st.bg} ${st.color}`}>
                   <span className={`w-1.5 h-1.5 rounded-full ${st.dot} ${rr.state === 'ERROR' ? 'animate-pulse' : ''}`} />
                   {st.vi}
                 </span>
@@ -165,12 +165,12 @@ export function MonitorTab({ rt, now, selected, onSelect, onInjectFault, onForce
           <Card title="Thử nghiệm khi demo" sub="Giám khảo tự chọn và bấm — hệ thống không biết trước">
             <label className="text-[11px] text-slate-500">Chèn một chu kỳ lỗi vào lần gia công kế tiếp</label>
             <select value={fault} onChange={(e) => setFault(e.target.value)}
-              className="mt-1.5 w-full text-sm border border-slate-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:border-slate-900">
+              className="mt-1.5 w-full text-sm border border-slate-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:border-brand-500">
               {faults.map((f) => <option key={f.code} value={f.code}>{f.vi}</option>)}
             </select>
             <div className="grid grid-cols-2 gap-2 mt-3">
               <button onClick={() => onInjectFault(m.id, fault)} disabled={live}
-                className="flex items-center justify-center gap-1.5 text-xs font-medium bg-slate-900 text-white rounded-md px-3 py-2 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed">
+                className="flex items-center justify-center gap-1.5 text-xs font-medium bg-brand-600 text-white rounded-lg px-3 py-2 hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed">
                 <Zap size={13} /> Chèn chu kỳ lỗi
               </button>
               <button onClick={() => onForceStop(m.id)} disabled={live}

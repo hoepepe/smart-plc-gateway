@@ -107,17 +107,17 @@ export function Card({ title, sub, right, children, className = '', pad = true }
   children: React.ReactNode; className?: string; pad?: boolean;
 }) {
   return (
-    <section className={`bg-white border border-slate-200 rounded-lg shadow-xs ${className}`}>
+    <section className={`bg-white border border-slate-200/80 rounded-xl shadow-card ${className}`}>
       {(title || right) && (
-        <header className="px-5 pt-4 pb-3 border-b border-slate-100 flex items-start justify-between gap-4">
+        <header className="px-5 pt-4 pb-3 flex items-start justify-between gap-4">
           <div>
-            {title && <h2 className="text-sm font-semibold text-slate-900">{title}</h2>}
+            {title && <h2 className="text-[15px] font-semibold text-slate-900">{title}</h2>}
             {sub && <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{sub}</p>}
           </div>
           {right}
         </header>
       )}
-      <div className={pad ? 'p-5' : ''}>{children}</div>
+      <div className={pad ? (title || right ? 'px-5 pb-5 pt-1' : 'p-5') : ''}>{children}</div>
     </section>
   );
 }
@@ -126,9 +126,9 @@ export function Note({ tone = 'slate', children }: { tone?: 'slate' | 'amber' | 
   const t = {
     slate: 'bg-slate-50 border-slate-200 text-slate-700',
     amber: 'bg-amber-50 border-amber-200 text-amber-900',
-    sky: 'bg-sky-50 border-sky-200 text-sky-900',
+    sky: 'bg-brand-50 border-brand-100 text-brand-900',
     rose: 'bg-rose-50 border-rose-200 text-rose-900',
     emerald: 'bg-emerald-50 border-emerald-200 text-emerald-900',
   }[tone];
-  return <div className={`border rounded-md px-4 py-3 text-xs leading-relaxed ${t}`}>{children}</div>;
+  return <div className={`border rounded-lg px-4 py-3 text-xs leading-relaxed ${t}`}>{children}</div>;
 }

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, Gauge, ScanSearch, Cable, Lock, Radio, BrainCircuit } from 'lucide-react';
+import { LayoutDashboard, Gauge, ScanSearch, Cable, BrainCircuit, Activity, BellRing, CircleGauge, Plus } from 'lucide-react';
 import { MachineRuntime } from './types';
 import { MACHINES } from './data/machines';
 import { proc } from './utils/detector';
@@ -8,7 +8,7 @@ import {
   applyExternalState, applyExternalCycle, accrueAll,
 } from './utils/sim';
 import { connectMqtt, ConnStatus, MqttConn, Ack } from './utils/mqtt';
-import { EdgeState, emptyEdge, pushCycle } from './utils/edge';
+import { EdgeState, LearnStatus, emptyEdge, pushCycle } from './utils/edge';
 import sampleEdge from './data/edge_sample.json';
 import { FleetTab } from './components/FleetTab';
 import { MonitorTab } from './components/MonitorTab';
@@ -16,6 +16,8 @@ import { OeeTab } from './components/OeeTab';
 import { DetectionTab } from './components/DetectionTab';
 import { ConnectTab } from './components/ConnectTab';
 import { ToastContainer, ToastMessage } from './components/Toast';
+import { Sidebar, Topbar, PageHeader, DateChip, PrimaryButton, KpiCard, NavItem, Notice } from './components/Shell';
+import { computeOee } from './utils/oee';
 
 const MQTT_URL = (import.meta as any).env?.VITE_MQTT_URL || 'ws://localhost:9001';
 const GW_ID = '01';
@@ -23,13 +25,19 @@ const TICK_MS = 250;
 
 type TabId = 'monitor' | 'fleet' | 'oee' | 'detect' | 'connect';
 
-const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
-  { id: 'monitor', label: 'Giám sát máy', icon: Activity },
-  { id: 'fleet', label: 'Máy và AI tự học', icon: BrainCircuit },
-  { id: 'oee', label: 'OEE và dừng máy', icon: Gauge },
-  { id: 'detect', label: 'Phát hiện bất thường', icon: ScanSearch },
-  { id: 'connect', label: 'Kết nối và chi phí', icon: Cable },
+const TABS: { id: TabId; label: string; icon: React.ElementType; title: string; sub: string }[] = [
+  { id: 'monitor', label: 'Tổng quan', icon: LayoutDashboard, title: '', sub: 'Đây là những gì cần chú ý trên các máy lúc này.' },
+  { id: 'fleet', label: 'Máy và AI tự học', icon: BrainCircuit, title: 'Máy và AI tự học',
+    sub: 'Mỗi máy tự học chuẩn bình thường của riêng nó, kỹ sư duyệt rồi mới giám sát.' },
+  { id: 'oee', label: 'OEE và dừng máy', icon: Gauge, title: 'OEE và dừng máy', sub: 'Độ sẵn sàng × hiệu suất × chất lượng, và nguyên nhân dừng máy xếp theo thời gian mất.' },
+  { id: 'detect', label: 'Phát hiện bất thường', icon: ScanSearch, title: 'Phát hiện bất thường', sub: 'Mô hình đã huấn luyện chấm điểm từng chu kỳ so với dải bình thường.' },
+  { id: 'connect', label: 'Kết nối và chi phí', icon: Cable, title: 'Kết nối và chi phí', sub: 'Gateway chỉ đọc, không đụng vào máy — và rẻ hơn nhiều so với thay PLC.' },
 ];
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 11 ? 'Chào buổi sáng' : h < 13 ? 'Chào buổi trưa' : h < 18 ? 'Chào buổi chiều' : 'Chào buổi tối';
+}
 
 export default function App() {
   // Trạng thái vận hành được cập nhật tại chỗ trong ref (nhanh, không sao chép),
@@ -42,6 +50,11 @@ export default function App() {
   }
   const [, setTick] = useState(0);
   const [tab, setTab] = useState<TabId>('monitor');
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false);
+  const [addSignal, setAddSignal] = useState(0);
+  const go = (t: TabId) => { setTab(t); setMobileNav(false); };
+  const addMachine = () => { go('fleet'); setAddSignal((k) => k + 1); };
   // Mở thẳng một máy qua đường link, ví dụ http://192.168.10.10:3000/?may=M02
   // — đây là đường link nằm trong mã QR hiện trên OLED của gateway gắn ở máy đó.
   const [selected, setSelected] = useState(() => {
@@ -130,76 +143,94 @@ export default function App() {
   const now = nowRef.current;
   const errors = MACHINES.filter((m) => rt[m.id].state === 'ERROR').length;
 
+  const edge = conn === 'demo' ? (sampleEdge as unknown as EdgeState) : edgeRef.current;
+  const learns = Object.values(edge.learn).filter(Boolean) as LearnStatus[];
+  const openAlarms = learns.reduce((n, l) => n + (l?.open_alarms ?? 0), 0);
+  const fleetN = edge.registry?.machines.length ?? 0;
+
+  // Thông báo trên chuông: máy đang báo lỗi, mô hình chờ duyệt, cảnh báo AI chưa xử lý
+  const notices: Notice[] = [
+    ...MACHINES.filter((m) => rt[m.id].state === 'ERROR').map((m) => ({
+      id: `err-${m.id}`, tone: 'red' as const, title: `${m.name} đang báo lỗi`,
+      sub: `${m.id}${rt[m.id].errorCode ? ` · mã ${rt[m.id].errorCode}` : ''} · bấm để xem dòng thời gian`,
+      go: () => { setSelected(m.id); go('monitor'); },
+    })),
+    ...learns.flatMap((l) => l.recipes.filter((x) => x.mode === 'review').map((x) => ({
+      id: `rev-${l.machine}-${x.recipe}`, tone: 'blue' as const, title: `${l.machine} đã học xong, chờ kỹ sư duyệt`,
+      sub: `${x.recipe === '*' ? '' : `${x.recipe} · `}học ${x.learned} chu kỳ`, go: () => go('fleet'),
+    }))),
+    ...learns.filter((l) => l.open_alarms > 0).map((l) => ({
+      id: `al-${l.machine}`, tone: 'amber' as const, title: `${l.machine}: ${l.open_alarms} cảnh báo AI chưa xử lý`,
+      sub: 'Bấm Đúng là lỗi / Báo nhầm / Bình thường mới để AI học tiếp', go: () => go('fleet'),
+    })),
+  ];
+
+  const nav: NavItem[] = TABS.map((t) => ({
+    id: t.id, label: t.label, icon: t.icon,
+    badge: t.id === 'monitor' && errors > 0 ? { text: String(errors), tone: 'red' }
+      : t.id === 'fleet' && fleetN > 0 ? { text: String(fleetN), tone: openAlarms ? 'blue' : 'gray' } : undefined,
+  }));
+  const cur = TABS.find((t) => t.id === tab)!;
+
+  // Chỉ số tổng quan
+  const oees = MACHINES.map((m) => computeOee(m, rt[m.id]));
+  const avg = (k: 'oee' | 'availability' | 'quality') => oees.reduce((a, o) => a + o[k], 0) / oees.length;
+  const running = MACHINES.filter((m) => ['AUTO', 'WORKING', 'DONE'].includes(rt[m.id].state)).length;
+  const cycles = MACHINES.reduce((n, m) => n + rt[m.id].totalCycles, 0);
+  const bad = MACHINES.reduce((n, m) => n + rt[m.id].anomalousCycles, 0);
+  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-5 lg:px-8 pt-4 flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">Smart PLC Gateway</h1>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Đọc dữ liệu từ PLC đời cũ, không đụng vào máy — đề D1, DENSO Factory Hacks 2026
-            </p>
-          </div>
+    <div className="min-h-screen bg-canvas text-slate-900">
+      <Sidebar items={nav} active={tab} onNav={(id) => go(id as TabId)} onPrimary={addMachine}
+        collapsed={collapsed} mobileOpen={mobileNav} onCloseMobile={() => setMobileNav(false)} />
 
-          <div className="flex flex-wrap items-center gap-2 pb-0.5 text-xs">
-            <span className="font-mono text-slate-600 tabular-nums px-2">{clock(now)}</span>
-            {errors > 0 && (
-              <span className="flex items-center gap-1.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-md px-2.5 py-1 font-medium">
-                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
-                {errors} máy đang báo lỗi
-              </span>
-            )}
-            <span className="flex items-center gap-1.5 border border-slate-200 text-slate-600 rounded-md px-2.5 py-1"
-              title="Gateway chỉ gửi lệnh đọc, không có lệnh ghi nào tới PLC">
-              <Lock size={12} /> Chỉ đọc
-            </span>
-            <span className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 border ${
-              conn === 'connected'
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                : 'bg-slate-50 text-slate-600 border-slate-200'
-            }`} title={conn === 'connected' ? MQTT_URL : 'Không có broker, đang dùng dữ liệu mô phỏng'}>
-              <Radio size={12} />
-              {conn === 'connected' ? 'Đã nối gateway' : conn === 'connecting' ? 'Đang nối…' : 'Chế độ mô phỏng'}
-            </span>
-          </div>
-        </div>
+      <div className={`transition-[padding] duration-200 ${collapsed ? 'lg:pl-[76px]' : 'lg:pl-64'}`}>
+        <Topbar title={cur.label}
+          onToggle={() => (window.matchMedia('(min-width: 1024px)').matches ? setCollapsed((v) => !v) : setMobileNav(true))}
+          clock={clock(now)} live={conn === 'connected'}
+          connLabel={conn === 'connected' ? 'Đã nối gateway' : conn === 'connecting' ? 'Đang nối…' : 'Chế độ mô phỏng'}
+          connTitle={conn === 'connected' ? MQTT_URL : 'Không có broker, đang dùng dữ liệu mô phỏng'}
+          notices={notices} />
 
-        <nav className="max-w-7xl mx-auto px-5 lg:px-8 mt-3 flex gap-1 overflow-x-auto" aria-label="Các màn hình">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            const on = tab === t.id;
-            return (
-              <button key={t.id} onClick={() => setTab(t.id)} aria-current={on ? 'page' : undefined}
-                className={`flex items-center gap-2 px-4 py-2.5 text-sm border-b-2 whitespace-nowrap transition-colors
-                  focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-slate-900 ${
-                  on ? 'border-slate-900 text-slate-900 font-medium'
-                     : 'border-transparent text-slate-500 hover:text-slate-800'}`}>
-                <Icon size={15} /> {t.label}
-              </button>
-            );
-          })}
-        </nav>
-      </header>
+        <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-7">
+          <PageHeader
+            title={tab === 'monitor' ? `${greeting()}, UET-BigHero` : cur.title}
+            sub={cur.sub}
+            right={tab === 'monitor' ? <><DateChip /><PrimaryButton onClick={addMachine}><Plus size={16} /> Thêm máy</PrimaryButton></> : undefined} />
 
-      <main className="max-w-7xl mx-auto px-5 lg:px-8 py-6">
-        {tab === 'monitor' && (
-          <MonitorTab rt={rt} now={now} selected={selected} onSelect={setSelected}
-            onInjectFault={injectFault} onForceStop={forceStop} live={conn === 'connected'} />
-        )}
-        {tab === 'fleet' && (
-          <FleetTab edge={conn === 'demo' ? (sampleEdge as unknown as EdgeState) : edgeRef.current}
-            connected={conn === 'connected'} sample={conn === 'demo'} send={send} notify={notify} />
-        )}
-        {tab === 'oee' && <OeeTab rt={rt} now={now} />}
-        {tab === 'detect' && <DetectionTab />}
-        {tab === 'connect' && <ConnectTab />}
+          {tab === 'monitor' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
+              <KpiCard label="Máy đang chạy" value={`${running}/${MACHINES.length}`} icon={Activity}
+                foot={errors ? `${errors} máy đang báo lỗi` : 'Không máy nào báo lỗi'} footTone={errors ? 'rose' : 'emerald'} />
+              <KpiCard label="OEE trung bình" value={pct(avg('oee'))} icon={CircleGauge} tone="emerald"
+                foot={`Sẵn sàng ${pct(avg('availability'))} · chất lượng ${pct(avg('quality'))}`} footTone="slate" onClick={() => go('oee')} />
+              <KpiCard label="Chu kỳ đã đọc" value={cycles.toLocaleString('vi-VN')} icon={ScanSearch} tone="amber"
+                foot={`${bad} chu kỳ bất thường (${cycles ? pct(bad / cycles) : '0%'})`} footTone="amber" onClick={() => go('detect')} />
+              <KpiCard label="Cảnh báo AI chưa xử lý" value={openAlarms} icon={BellRing} tone="rose"
+                foot={fleetN ? `Trên ${fleetN} máy tự học · bấm để phản hồi` : 'Chưa có máy tự học nào'} footTone="blue" onClick={() => go('fleet')} />
+            </div>
+          )}
 
-        <footer className="mt-10 pt-5 border-t border-slate-200 text-xs text-slate-500 leading-relaxed max-w-3xl">
-          {conn === 'connected'
-            ? 'Trạng thái máy và chu kỳ gia công đang đến từ gateway qua MQTT.'
-            : 'Chưa có PLC thật nên trạng thái máy là mô phỏng. Đường cong mỗi chu kỳ lấy từ tập kiểm tra của ml/cycles.py, và điểm bất thường tính bằng đúng mô hình đã huấn luyện.'}
-        </footer>
-      </main>
+          {tab === 'monitor' && (
+            <MonitorTab rt={rt} now={now} selected={selected} onSelect={setSelected}
+              onInjectFault={injectFault} onForceStop={forceStop} live={conn === 'connected'} />
+          )}
+          {tab === 'fleet' && (
+            <FleetTab edge={edge} connected={conn === 'connected'} sample={conn === 'demo'} send={send} notify={notify}
+              addSignal={addSignal} />
+          )}
+          {tab === 'oee' && <OeeTab rt={rt} now={now} />}
+          {tab === 'detect' && <DetectionTab />}
+          {tab === 'connect' && <ConnectTab />}
+
+          <footer className="mt-10 pt-5 border-t border-slate-200 text-xs text-slate-500 leading-relaxed max-w-3xl">
+            {conn === 'connected'
+              ? 'Trạng thái máy và chu kỳ đang đến từ gateway qua MQTT.'
+              : 'Chưa có PLC thật nên trạng thái máy là mô phỏng. Đường cong mỗi chu kỳ lấy từ tập kiểm tra của ml/cycles.py, và điểm bất thường tính bằng đúng mô hình đã huấn luyện.'}
+          </footer>
+        </main>
+      </div>
 
       <ToastContainer toasts={toasts} onDismiss={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
     </div>

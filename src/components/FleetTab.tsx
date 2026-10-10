@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Plus, Cpu, WifiOff, CheckCircle2, XCircle, Sparkles, RotateCcw, History, Settings2,
   AlertTriangle, Tag, GraduationCap, ShieldCheck, Activity, Trash2, Terminal,
@@ -30,12 +30,19 @@ interface Props {
   sample: boolean;       // đang hiện dữ liệu mẫu ghi sẵn, không gửi lệnh được
   send: Send;
   notify: (type: 'success' | 'warning' | 'info', title: string, description?: string) => void;
+  addSignal?: number;    // tăng lên mỗi lần bấm "Thêm máy" ở thanh bên → mở form
 }
 
-export function FleetTab({ edge, connected, sample, send, notify }: Props) {
+export function FleetTab({ edge, connected, sample, send, notify, addSignal = 0 }: Props) {
   const machines = edge.registry?.machines ?? [];
   const [sel, setSel] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  useEffect(() => {
+    if (!addSignal) return;
+    if (sample) notify('info', 'Đây là dữ liệu mẫu', 'Chạy runtime edge để thêm máy thật.');
+    else if (edge.registry) setAdding(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addSignal]);
   const cur = machines.find((m) => m.id === sel) ?? machines[0];
 
   const run = async (op: string, body: Record<string, unknown>, ok: string) => {
@@ -60,7 +67,7 @@ export function FleetTab({ edge, connected, sample, send, notify }: Props) {
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-slate-900">Máy đã khai báo <span className="text-slate-400 font-normal">· {machines.length}</span></h2>
             <button onClick={() => (sample ? notify('info', 'Đây là dữ liệu mẫu') : setAdding(true))}
-              className="inline-flex items-center gap-1.5 text-xs font-medium bg-slate-900 text-white rounded-md px-2.5 py-1.5 hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900">
+              className="inline-flex items-center gap-1.5 text-xs font-medium bg-brand-600 text-white rounded-lg px-2.5 py-1.5 hover:bg-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600">
               <Plus size={14} /> Thêm máy
             </button>
           </div>
@@ -117,15 +124,15 @@ function EmptyState({ connected }: { connected: boolean }) {
 
 /* ───────────────────────── thẻ máy ───────────────────────── */
 function ModeChip({ mode, st }: { mode: Mode | null; st?: LearnStatus }) {
-  if (!st) return <span className="text-[11px] px-2 py-0.5 rounded border border-slate-200 text-slate-500">Đang khởi động</span>;
+  if (!st) return <span className="text-[11px] px-2 py-0.5 rounded-full border border-slate-200 text-slate-500">Đang khởi động</span>;
   if (!st.conn.ok) return (
-    <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border bg-rose-50 text-rose-800 border-rose-200">
+    <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border bg-rose-50 text-rose-800 border-rose-200">
       <WifiOff size={11} /> Mất kết nối PLC
     </span>);
   if (!mode) return null;
   const m = MODE_META[mode];
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded border ${m.cls}`}>
+    <span className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-full border ${m.cls}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${m.dot} ${mode === 'learning' ? 'animate-pulse' : ''}`} />{m.label}
     </span>);
 }
@@ -135,8 +142,8 @@ const MachineCard: React.FC<{ cfg: MachineCfg; p: Profile; st?: LearnStatus; on:
   const learning = st?.recipes.find((r) => r.mode === 'learning');
   return (
     <button onClick={onClick} aria-pressed={on}
-      className={`w-full text-left bg-white border rounded-lg px-4 py-3 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 ${
-        on ? 'border-slate-900 ring-1 ring-slate-900' : 'border-slate-200 hover:border-slate-400'}`}>
+      className={`w-full text-left bg-white border rounded-xl shadow-card px-4 py-3 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 ${
+        on ? 'border-brand-500 ring-2 ring-brand-500/15' : 'border-slate-200 hover:border-slate-400'}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-slate-900 truncate">{cfg.name}</div>
@@ -157,7 +164,7 @@ const MachineCard: React.FC<{ cfg: MachineCfg; p: Profile; st?: LearnStatus; on:
       </div>
       {learning && (
         <div className="mt-2.5">
-          <Bar value={learning.learned / learning.target} color="#0284c7" height={5} />
+          <Bar value={learning.learned / learning.target} color="#1769e8" height={5} />
           <div className="text-[11px] text-slate-500 mt-1 tabular-nums">{learning.learned}/{learning.target} {p.cycle}</div>
         </div>
       )}
@@ -207,7 +214,7 @@ const MachineDetail: React.FC<{ cfg: MachineCfg; p: Profile; st?: LearnStatus; c
             {recipes.map((x) => (
               <button key={x.recipe} role="tab" aria-selected={x.recipe === r?.recipe} onClick={() => setRsel(x.recipe)}
                 className={`text-xs px-2.5 py-1 rounded border inline-flex items-center gap-1.5 ${
-                  x.recipe === r?.recipe ? 'border-slate-900 text-slate-900 font-medium' : 'border-slate-200 text-slate-500 hover:text-slate-800'}`}>
+                  x.recipe === r?.recipe ? 'border-brand-500 bg-brand-50 text-brand-700 font-medium' : 'border-slate-200 text-slate-500 hover:text-slate-800'}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${MODE_META[x.mode].dot}`} /> {p.recipe} {recipeLabel(x.recipe)}
               </button>
             ))}
@@ -248,8 +255,8 @@ function Stepper({ mode }: { mode: Mode }) {
     <ol className="px-5 pb-4 pt-1 grid grid-cols-4 gap-2" aria-label="Vòng đời mô hình">
       {STEPS.map((s, i) => (
         <li key={s.key} className="min-w-0">
-          <div className={`h-1 rounded-full ${i < at ? 'bg-slate-900' : i === at ? 'bg-sky-500' : 'bg-slate-200'}`} />
-          <div className={`mt-1.5 text-xs font-medium ${i <= at ? 'text-slate-900' : 'text-slate-400'}`}>{s.label}</div>
+          <div className={`h-1 rounded-full ${i < at ? 'bg-brand-600' : i === at ? 'bg-brand-300' : 'bg-slate-200'}`} />
+          <div className={`mt-1.5 text-xs font-medium ${i < at ? 'text-slate-900' : i === at ? 'text-brand-700' : 'text-slate-400'}`}>{s.label}</div>
           <div className="text-[11px] text-slate-500 truncate">{s.sub}</div>
         </li>
       ))}
@@ -287,7 +294,7 @@ function LearningPanel({ r, p, cycles }: { r: RecipeStatus; p: Profile; cycles: 
             <span className="font-medium text-slate-900 tabular-nums">{r.learned} / {r.target} {p.cycle}</span>
             <span className="text-xs text-slate-500">{eta != null ? `còn khoảng ${fmtDur(eta)}` : `đang đo nhịp ${p.cycle}…`}</span>
           </div>
-          <Bar value={r.learned / r.target} color="#0284c7" height={10} />
+          <Bar value={r.learned / r.target} color="#1769e8" height={10} />
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
           <Stat label="Đã học" value={r.learned} />
@@ -379,7 +386,7 @@ function MonitorPanel({ r, p: prof, st, base, run }: { r: RecipeStatus; p: Profi
             <p className="text-[11px] text-slate-500 mt-1">Dịch so với bản gốc: {p.shift_origin?.toFixed(2) ?? '—'}σ — theo dõi số này để thấy hao mòn từ từ.</p>
             <div className="flex flex-wrap gap-2 mt-2.5">
               <button onClick={() => run('approve', base, `Đã chuyển sang v${p.version}`)}
-                className="text-xs font-medium bg-slate-900 text-white rounded-md px-3 py-1.5 hover:bg-slate-700">Duyệt bản mới</button>
+                className="text-xs font-medium bg-brand-600 text-white rounded-lg px-3 py-1.5 hover:bg-brand-700">Duyệt bản mới</button>
               <button onClick={() => run('reject', base, 'Giữ bản đang chạy')}
                 className="text-xs border border-slate-300 rounded-md px-3 py-1.5 hover:bg-white">Giữ bản cũ</button>
             </div>
@@ -419,7 +426,7 @@ function ScorePanel({ cycles, p, mode }: { cycles: EdgeCycle[]; p: Profile; mode
             ))}
             <text x={W - P.r} y={y(1) - 4} textAnchor="end" fontSize="10" fill="#e11d48">ngưỡng</text>
             {pts.length > 1 && (
-              <polyline fill="none" stroke="#0284c7" strokeWidth="1.6"
+              <polyline fill="none" stroke="#1769e8" strokeWidth="1.8"
                 points={ew.map((v, i) => `${x(i)},${y(v)}`).join(' ')} />
             )}
             {pts.map((c, i) => c.kind === 'dq'
@@ -432,7 +439,7 @@ function ScorePanel({ cycles, p, mode }: { cycles: EdgeCycle[]; p: Profile; mode
           <div className="flex flex-wrap gap-4 text-[11px] text-slate-500 mt-1">
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-500" /> {p.cycle}</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-600" /> bị cảnh báo</span>
-            <span className="inline-flex items-center gap-1"><span className="w-3 h-0.5 bg-sky-600" /> trung bình trượt</span>
+            <span className="inline-flex items-center gap-1"><span className="w-3 h-0.5 bg-brand-600" /> trung bình trượt</span>
             {dqN > 0 && <span>× lỗi tín hiệu ({dqN})</span>}
           </div>
         </div>
@@ -510,7 +517,7 @@ const AlarmRow: React.FC<{ a: EdgeAlarm; p: Profile; known: string[]; base: Base
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="font-mono text-xs text-slate-500 tabular-nums">{tsClock(a.ts)}</span>
           <span className="font-semibold text-slate-900 tabular-nums">điểm {a.norm.toFixed(2)}</span>
-          <span className={`text-[11px] px-1.5 py-0.5 rounded border ${s.cls}`}>{s.label}{a.fault_type ? ` · ${a.fault_type}` : ''}</span>
+          <span className={`text-[11px] px-2 py-0.5 rounded-full border ${s.cls}`}>{s.label}{a.fault_type ? ` · ${a.fault_type}` : ''}</span>
           {a.suggestion && a.status === 'open' && (
             <span className="text-[11px] text-slate-600">AI đoán: <b>{a.suggestion.type}</b> ({Math.round(a.suggestion.prob * 100)}%)</span>
           )}
@@ -523,7 +530,7 @@ const AlarmRow: React.FC<{ a: EdgeAlarm; p: Profile; known: string[]; base: Base
         <div className="flex flex-col items-stretch sm:items-end gap-1.5">
           {!askType ? (
             <div className="flex flex-wrap gap-1.5">
-              <button onClick={() => setAskType(true)} className="text-xs font-medium bg-slate-900 text-white rounded px-2.5 py-1.5 hover:bg-slate-700">Đúng là lỗi</button>
+              <button onClick={() => setAskType(true)} className="text-xs font-medium bg-brand-600 text-white rounded-md px-2.5 py-1.5 hover:bg-brand-700">Đúng là lỗi</button>
               <button onClick={() => send('false_alarm')} className="text-xs border border-slate-300 rounded px-2.5 py-1.5 hover:bg-slate-50">Báo nhầm</button>
               <button onClick={() => send('new_normal')} className="text-xs border border-sky-300 text-sky-800 rounded px-2.5 py-1.5 hover:bg-sky-50">Bình thường mới</button>
             </div>
@@ -533,13 +540,13 @@ const AlarmRow: React.FC<{ a: EdgeAlarm; p: Profile; known: string[]; base: Base
               <input id={`in-${a.id}`} list={listId} value={ft} onChange={(e) => setFt(e.target.value)} autoFocus
                 placeholder={`Loại lỗi, vd. ${p.faults[0] ?? 'Thiếu phôi'}`} className="text-xs border border-slate-300 rounded px-2 py-1.5 w-44" />
               <datalist id={listId}>{known.map((k) => <option key={k} value={k} />)}</datalist>
-              <button type="submit" className="text-xs font-medium bg-slate-900 text-white rounded px-2.5 py-1.5">Lưu</button>
+              <button type="submit" className="text-xs font-medium bg-brand-600 text-white rounded-md px-2.5 py-1.5 hover:bg-brand-700">Lưu</button>
               <button type="button" onClick={() => setAskType(false)} className="text-xs text-slate-500 px-1">Huỷ</button>
               {known.length > 0 && (
                 <div className="basis-full flex flex-wrap gap-1 sm:justify-end">
                   {known.slice(0, 6).map((k) => (
                     <button key={k} type="button" onClick={() => setFt(k)}
-                      className={`text-[11px] rounded border px-1.5 py-0.5 ${ft === k ? 'border-slate-900 text-slate-900' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}>{k}</button>
+                      className={`text-[11px] rounded border px-1.5 py-0.5 ${ft === k ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}>{k}</button>
                   ))}
                 </div>
               )}
@@ -572,7 +579,7 @@ function VersionsPanel({ r, base, run }: { r: RecipeStatus; base: Base; run: Run
                 <div className="text-[11px] text-slate-500 leading-snug">{v.note}</div>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                <span className={`text-[11px] px-1.5 py-0.5 rounded border ${v.status === 'active' ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                <span className={`text-[11px] px-2 py-0.5 rounded-full border ${v.status === 'active' ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                   : v.status === 'pending' ? 'bg-amber-50 text-amber-900 border-amber-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
                   {STATUS_VI[v.status]}</span>
                 {v.status === 'retired' && (
@@ -618,7 +625,7 @@ function SettingsPanel({ cfg, p, st, run }: { cfg: MachineCfg; p: Profile; st: L
           Tự duyệt bản học lại khi chuẩn dịch ít (dưới 1σ so với bản đang chạy). Bản dịch nhiều vẫn chờ người duyệt.
         </label>
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-          <button type="submit" className="text-xs font-medium bg-slate-900 text-white rounded px-3 py-1.5 hover:bg-slate-700">Lưu cài đặt</button>
+          <button type="submit" className="text-xs font-medium bg-brand-600 text-white rounded-md px-3 py-1.5 hover:bg-brand-700">Lưu cài đặt</button>
           <div className="flex gap-1.5">
             <button type="button" onClick={() => run('relearn', { machine: id, recipe: st.recipes[0]?.recipe ?? '*' }, 'Máy bắt đầu học lại từ đầu')}
               className="text-xs border border-slate-300 rounded px-2.5 py-1.5 hover:bg-slate-50 inline-flex items-center gap-1"><RotateCcw size={12} /> Học lại từ đầu</button>

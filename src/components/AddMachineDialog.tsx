@@ -188,7 +188,7 @@ export function AddMachineDialog({ templates, profiles, existing, onClose, onSub
         <footer className="px-5 py-3 border-t border-slate-100 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="text-sm border border-slate-300 rounded-md px-3.5 py-2 hover:bg-slate-50">Huỷ</button>
           <button type="submit" disabled={busy}
-            className="text-sm font-medium bg-slate-900 text-white rounded-md px-3.5 py-2 hover:bg-slate-700 disabled:opacity-60">
+            className="text-sm font-medium bg-brand-600 text-white rounded-lg px-3.5 py-2 hover:bg-brand-700 disabled:opacity-60">
             {busy ? 'Đang gửi…' : 'Lưu và bắt đầu học'}
           </button>
         </footer>

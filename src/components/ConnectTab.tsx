@@ -34,7 +34,7 @@ function NumInput({ id, label, value, onChange, unit, step = 1, note }: {
         <input id={id} type="number" min={0} step={step} value={value}
           onChange={(e) => onChange(Math.max(0, Number(e.target.value) || 0))}
           className="w-full bg-white border border-slate-300 rounded-md px-3 py-2 font-mono tabular-nums text-sm
-            focus:outline-2 focus:outline-slate-900 focus:border-slate-900" />
+            focus:outline-2 focus:outline-brand-500 focus:border-brand-500" />
         <span className="text-xs text-slate-500 w-14 shrink-0">{unit}</span>
       </div>
       {note && <p className="text-xs text-slate-500 mt-1">{note}</p>}

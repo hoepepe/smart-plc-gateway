@@ -112,7 +112,7 @@ export const ISSUE_VI: Record<string, string> = {
 };
 
 export const MODE_META: Record<Mode, { label: string; cls: string; dot: string }> = {
-  learning: { label: 'Đang học', cls: 'bg-sky-50 text-sky-800 border-sky-200', dot: 'bg-sky-500' },
+  learning: { label: 'Đang học', cls: 'bg-brand-50 text-brand-700 border-brand-100', dot: 'bg-brand-500' },
   review: { label: 'Chờ duyệt', cls: 'bg-amber-50 text-amber-900 border-amber-200', dot: 'bg-amber-500' },
   monitoring: { label: 'Đang giám sát', cls: 'bg-emerald-50 text-emerald-800 border-emerald-200', dot: 'bg-emerald-500' },
 };

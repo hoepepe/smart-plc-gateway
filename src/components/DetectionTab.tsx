@@ -34,8 +34,8 @@ export function DetectionTab() {
         {PROCS.map((x) => (
           <button key={x} role="tab" aria-selected={p === x} onClick={() => setP(x)}
             className={`px-4 py-2 rounded-md text-sm border transition-colors
-              focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 ${
-              p === x ? 'bg-slate-900 text-white border-slate-900'
+              focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 ${
+              p === x ? 'bg-brand-600 text-white border-brand-600'
                       : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'}`}>
             {proc(x).vi}
           </button>

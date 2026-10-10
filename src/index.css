@@ -3,7 +3,20 @@
 @variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: "Lexend", system-ui, -apple-system, sans-serif;
+  --font-sans: "Be Vietnam Pro", system-ui, -apple-system, sans-serif;
+  /* xanh chủ đạo kiểu MEXA */
+  --color-brand-50: #eef5ff;
+  --color-brand-100: #d9e8ff;
+  --color-brand-200: #bcd7ff;
+  --color-brand-300: #8ebdff;
+  --color-brand-400: #5a9bff;
+  --color-brand-500: #2f7bf6;
+  --color-brand-600: #1769e8;
+  --color-brand-700: #1155c4;
+  --color-brand-800: #13479c;
+  --color-brand-900: #163e7b;
+  --color-canvas: #f5f7fb;
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.03);
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
