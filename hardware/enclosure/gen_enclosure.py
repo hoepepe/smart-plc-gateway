@@ -40,8 +40,8 @@ MODULES = {
     "ADS1115": (115, 8, 28.0, 18.0, LEDGE, "ADS1115, dây cảm biến qua ốc siết cáp"),
     "ESP32":   (102, 40, 55.0, 28.0, LEDGE, "ESP32 DevKit V1 38 chân, cổng USB ra vách phải"),
     "LM2596":  (106, 78, 43.0, 21.0, LEDGE, "LM2596 hạ áp 24V→5V, gần jack DC"),
-    "MPU6050": (45, 84, 21.0, 16.0, LEDGE, "GY-521 MPU6050"),
-    "HW500":   (72, 78, 30.0, 20.0, LEDGE, "Module HW-500 (kích thước giả định — ĐO LẠI)"),
+    "MPU6050": (34, 84, 21.0, 16.0, LEDGE, "GY-521 MPU6050"),
+    "HW685":   (59, 78, 42.0, 25.0, LEDGE, "HW-685 đổi 4–20 mA → 0–3,3 V, nguồn 7–36 V"),
 }
 # OLED SSD1306 0.96" gắn dưới nắp
 # 0.96" SSD1306: PCB 27 × 27, dày 4,1, vùng hiển thị 21,74 × 11,2 (datasheet module)
@@ -194,7 +194,7 @@ def preview(base_tm, lid_tm):
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
     colors = {"W5500": "#2b6cb0", "RS232": "#c05621", "PC817": "#2f855a", "ADS1115": "#6b46c1",
-              "ESP32": "#1a202c", "LM2596": "#b7791f", "MPU6050": "#2c7a7b", "HW500": "#718096"}
+              "ESP32": "#1a202c", "LM2596": "#b7791f", "MPU6050": "#2c7a7b", "HW685": "#718096"}
 
     def module_boxes(ax):
         for name, (x, y, L, W, ledge, _) in MODULES.items():

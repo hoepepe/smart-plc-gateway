@@ -22,7 +22,7 @@ SRC = {
     "PC817": "4 kênh, header 5 chân hai đầu · kích thước phổ biến, đo lại",
     "ADS1115": "28 × 17,7 (theo Adafruit) · bản clone có thể khác",
     "MPU6050": "GY-521 · 21 × 16 phổ biến, đo lại",
-    "HW500": "Chưa rõ loại module — khối giả định 30 × 20",
+    "HW685": "Đổi dòng 4–20 mA sang áp · 42 × 25 × 10, nguồn 7–36 V (theo trang bán hàng SCCC), đo lại",
 }
 mods = [dict(name=k, x=x, y=y, L=L, W=W, z=z, desc=d, src=SRC.get(k, ""))
         for k, (x, y, L, W, z, d) in G.MODULES.items()]
@@ -197,10 +197,14 @@ const BUILD = {
     B(g, 3, 8, T, 3, 1.6, 1.1, CHIP());
     header(g, (L - 7 * 2.54) / 2, 1.27, 8, 'x');
   },
-  HW500(g, L, W) {
-    B(g, 0, 0, 0, L, W, T, PCB_GREY());
-    B(g, L / 2 - 3, W / 2 - 3, T, 6, 6, 1.2, CHIP());
-    header(g, 1.27, (W - 2 * 2.54) / 2, 3, 'y');
+  HW685(g, L, W) {
+    B(g, 0, 0, 0, L, W, T, PCB_BLUE());
+    B(g, 0.5, W / 2 - 5, T, 7.5, 10, 8.5, mat('term', 0x2f8f5b));        // cầu đấu I+ I-
+    B(g, 1.5, W / 2 - 4, T + 8.5, 4, 2.5, 0.6, METAL()); B(g, 1.5, W / 2 + 1.5, T + 8.5, 4, 2.5, 0.6, METAL());
+    B(g, 15, W / 2 - 2.5, T, 5, 4, 1.5, CHIP());                          // op-amp
+    for (const py of [3, W - 8]) { B(g, 24, py, T, 9.5, 4.8, 10, mat('pot', 0x2f62c4)); Cz(g, 25.5, py + 2.4, T + 10, 1.1, 1.2, GOLD()); }
+    header(g, L - 1.27, W / 2 - 2.54, 3, 'y');                            // VCC VOUT GND
+    B(g, 36, 3, T, 2.6, 5.1, 2.5, BLACK());                               // jumper chọn dải ra
   },
 };
 
@@ -218,7 +222,7 @@ const mods = new THREE.Group(); world.add(mods);
 const anchors = [];
 for (const m of D.mods) {
   const g = new THREE.Group(); g.position.set(m.x, m.y, m.z);
-  (BUILD[m.name] || BUILD.HW500)(g, m.L, m.W); mods.add(g);
+  (BUILD[m.name] || BUILD.HW685)(g, m.L, m.W); mods.add(g);
   anchors.push({ obj: mods, p: new THREE.Vector3(m.x + m.L / 2, m.y + m.W / 2, m.z + 18), text: m.name, kind: 'mod' });
 }
 // OLED dưới nắp, mặt kính quay lên cửa sổ
