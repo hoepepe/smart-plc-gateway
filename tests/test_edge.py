@@ -135,3 +135,25 @@ def test_shared_classifier_same_machine_type():
     e = [x for x in feed(b, stream("PRESS_FORCE", 4, 77, fault="DOUBLE_HIT", scale=1.4)) if x.get("suggestion")]
     assert e and e[-1]["suggestion"]["type"] == "DOUBLE_HIT"
     assert Brain("SB1", t_cfg, st).clf_info["n"] == 0
+
+
+def test_false_alarm_feedback_triggers_relearn():
+    """Kỹ sư bấm Báo nhầm đủ số lần → tự sinh bản học lại có chứa các chu kỳ đó, chờ duyệt."""
+    b = new_brain()
+    learn4(b); b.approve("*")
+    feed(b, stream("PRESS_FORCE", 30, 5) + stream("PRESS_FORCE", 30, 6))
+    evs = feed(b, stream("PRESS_FORCE", 12, 90, scale=1.25))         # máy đổi lô phôi → cảnh báo hàng loạt
+    ids = [e["alarm_id"] for e in evs if e.get("alarm_id")]
+    assert len(ids) >= 5
+    outs = [b.feedback(i, "false_alarm") for i in ids[:5]]
+    assert outs[-1].get("candidate") and b._rc("*")["pending"]["kind"] == "false_alarm"
+    assert "note" in outs[0]
+
+
+def test_old_model_still_scores_new_features():
+    """Mô hình học từ phiên bản cũ (10 đặc trưng) vẫn chấm được chu kỳ có 13 đặc trưng, không phải học lại."""
+    X = np.array(stream("PRESS_FORCE", 40, 1) + stream("PRESS_FORCE", 40, 2))
+    old = DT.train(X[:, :10])
+    s = DT.score(old, X[0])
+    assert np.isfinite(s["norm"]) and len(s["top"]) == 3
+    assert DT.shift(old, DT.train(X)) >= 0

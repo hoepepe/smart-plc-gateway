@@ -90,7 +90,12 @@ class Store:
         rows = self.q(sql, (machine, recipe, *args))
         if limit:
             rows = rows[-limit:]
-        return [r["id"] for r in rows], [json.loads(r["f"]) for r in rows]
+        ids, fs = [r["id"] for r in rows], [json.loads(r["f"]) for r in rows]
+        if fs:   # chu kỳ ghi từ phiên bản cũ có ít đặc trưng hơn → chỉ giữ chu kỳ cùng số đặc trưng với chu kỳ mới nhất
+            d = len(fs[-1])
+            keep = [i for i, f in enumerate(fs) if len(f) == d]
+            ids, fs = [ids[i] for i in keep], [fs[i] for i in keep]
+        return ids, fs
 
     def set_role(self, machine, recipe, old, new):
         self.x("UPDATE cycles SET role=? WHERE machine=? AND recipe=? AND role=?", (new, machine, recipe, old))

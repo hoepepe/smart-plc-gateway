@@ -104,18 +104,11 @@ và loại đúng chu kỳ có máy báo lỗi (M5 + D110).
 
 ## Giới hạn hiện tại (nói thật nếu được hỏi)
 
-- Đo trên dữ liệu mô phỏng: học 200 chu kỳ qua 5 ca, thử trên ca chưa từng thấy.
-
-  | Máy | Bắt lỗi | Báo nhầm |
-  |---|---|---|
-  | Máy ép | 98–100% | 1,3% |
-  | Máy siết | 100% | 4% |
-  | CNC | mòn dao 100%, rung 100%, gãy dao 70% | 0% |
-  | Khí nén | rò khí 100%, van kẹt 68% | 8% |
-
-  - CNC gãy dao muộn ở lần ăn dao cuối thì tải chỉ tụt ngắn nên bị lọt.
-  - Khí nén báo nhầm cao vì áp nguồn dao động giữa các ca.
-  - Học quá ít (khoảng 120 chu kỳ) thì lỗi "ép hai lần" chỉ bắt được khoảng 40%. Vì vậy mặc định học 300 chu kỳ và nên học qua 2 ca.
+- Số đo đầy đủ, có so với giới hạn PLC và Isolation Forest, kèm khoảng tin cậy 95%: [ml/reports/do_tin_cay.md](../ml/reports/do_tin_cay.md) (tạo lại bằng `python ml/danh_gia_do_tin_cay.py`).
+  - Mô phỏng 4 loại máy (học lẫn 2% lỗi không ai biết, kiểm tra trên 10 ca khác): AI bắt 81–100% lỗi, báo nhầm 0,2–2,2%; giới hạn PLC bắt 30–48%.
+  - Dữ liệu thật Bosch CNC: có kỹ sư phản hồi thì AUC 0,90 (0,83–0,96), bắt 7/9 lỗi, nhưng báo nhầm ~19% — chưa đủ để chạy không cần người duyệt.
+  - Khí nén còn yếu nhất: van kẹt bắt ~63%.
+- Báo nhầm và Bình thường mới: đủ 5 nhãn thì AI tự tạo bản học lại chờ duyệt (không đợi lần học lại định kỳ).
 - Chưa tự nhận ra loại máy từ hình dạng tín hiệu; kỹ sư chọn một lần khi thêm máy.
 - Các tab cũ (Giám sát máy, OEE, Phát hiện bất thường) vẫn là demo cố định 4 máy. Tab "Máy và AI tự học" là phần tự đổi theo máy.
 - Driver mới có Mitsubishi MC 3E. Omron FINS và Keyence chưa làm.

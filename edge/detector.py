@@ -19,12 +19,13 @@ from sklearn.covariance import LedoitWolf
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ml"))
 import cycles as C  # noqa: E402
 
-FEATURES = C.FEATURES + ["duration_s"]
+FEATURES = C.FEATURES + ["duration_s", "n_prominent", "late_level", "mid_jerk"]
 FEATURES_VI = {
     "peak": "giá trị đỉnh", "trough": "giá trị đáy", "t_peak": "thời điểm đạt đỉnh",
     "mean_level": "mức trung bình", "rise_slope": "độ dốc lên", "roughness": "độ gồ ghề",
     "n_peaks": "số đỉnh", "early_level": "mức đoạn đầu", "mid_level": "mức đoạn giữa",
     "duration_s": "thời gian chu kỳ",
+    "n_prominent": "số đỉnh rõ rệt", "late_level": "mức đoạn cuối", "mid_jerk": "độ giật đoạn giữa",
 }
 RATE = C.FS
 PCT = 99.5
@@ -33,10 +34,34 @@ ROBUST_Z = 5.0   # ngưỡng lọc chu kỳ nghi lỗi trong dữ liệu học
 
 
 def features(y, duration_s=None):
-    """Đặc trưng của một chu kỳ: 9 đặc trưng hình dạng (ml/cycles.py) + thời gian chu kỳ."""
+    """Đặc trưng của một chu kỳ: 9 đặc trưng hình dạng (ml/cycles.py) + thời gian chu kỳ + 3 đặc trưng chống nhiễu.
+
+    3 đặc trưng thêm tính trên tín hiệu đã làm mượt nên không bị nhiễu điện đánh lừa:
+      n_prominent — số đỉnh rõ rệt (lên trên 75% biên độ rồi xuống dưới 45% mới tính đỉnh tiếp): bắt ép hai lần, siết hai lần
+      late_level  — mức trung bình đoạn 60–90% chu kỳ: bắt lỗi xảy ra cuối chu kỳ (gãy dao, nhả lực sớm)
+      mid_jerk    — độ giật đoạn 30–70% so với biên độ: bắt van kẹt, rung, giật cục
+    """
     y = np.asarray(y, dtype=float)
     d = len(y) / RATE if duration_s is None else float(duration_s)
-    return np.r_[C.extract(y), d]
+    return np.r_[C.extract(y), d, _robust(y)]
+
+
+def _robust(y):
+    n = len(y)
+    k = max(3, n // 30)
+    ys = np.convolve(y, np.ones(k) / k, mode="same")
+    lo, hi = np.percentile(ys, 2), np.percentile(ys, 98)
+    r = (hi - lo) or 1.0
+    cnt, armed = 0, True
+    for v in ys[k:-k]:
+        if armed and v > lo + 0.75 * r:
+            cnt += 1; armed = False
+        elif not armed and v < lo + 0.45 * r:
+            armed = True
+    late = float(ys[int(n * 0.6):int(n * 0.9)].mean())
+    a, b = int(n * 0.3), int(n * 0.7)
+    mid = float(np.mean(np.abs(np.diff(ys[a:b]))) / r * n)
+    return [cnt, late, mid]
 
 
 def train(X, recipe="*", pct=PCT):
@@ -109,7 +134,7 @@ def _robz(m, X):
 
 def score(m, f):
     """Chấm một chu kỳ. Trả về điểm chuẩn hoá (1,0 = đúng ngưỡng) và 3 đặc trưng lệch nhiều nhất."""
-    f = np.asarray(f, dtype=float)
+    f = np.asarray(f, dtype=float)[:len(m["mu"])]     # mô hình học từ phiên bản cũ có ít đặc trưng hơn
     a = float(_maha(m, f)[0])
     z = np.abs(f - _arr(m, "med")) / _arr(m, "scale")
     r = float(z.max())
@@ -124,5 +149,6 @@ def score(m, f):
 def shift(old, new):
     """Chuẩn mới lệch bao nhiêu so với chuẩn cũ — tính bằng Mahalanobis của trung bình mới dưới chuẩn cũ,
     chia căn số chiều (≈ số độ lệch chuẩn trung bình mỗi đặc trưng)."""
-    d = len(old["mu"])
-    return float(_maha(old, np.asarray(new["mu"]))[0] / np.sqrt(d))
+    d = min(len(old["mu"]), len(new["mu"]))
+    o = {**old, "mu": old["mu"][:d], "inv_cov": [row[:d] for row in old["inv_cov"][:d]]}
+    return float(_maha(o, np.asarray(new["mu"][:d]))[0] / np.sqrt(d))

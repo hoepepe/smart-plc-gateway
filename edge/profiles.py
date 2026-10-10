@@ -12,6 +12,7 @@ GENERIC_FEATURES = {
     "mean_level": "mức trung bình", "rise_slope": "độ dốc lên", "roughness": "độ gồ ghề",
     "n_peaks": "số đỉnh", "early_level": "mức đoạn đầu", "mid_level": "mức đoạn giữa",
     "duration_s": "thời gian chu kỳ",
+    "n_prominent": "số đỉnh rõ rệt", "late_level": "mức đoạn cuối", "mid_jerk": "độ giật đoạn giữa",
 }
 
 PROFILES = {
@@ -20,7 +21,8 @@ PROFILES = {
         signal="Lực ép", unit="kN", cycle="lần ép", recipe="Mã hàng",
         features={"peak": "lực ép cực đại", "t_peak": "thời điểm đạt lực đỉnh", "rise_slope": "tốc độ tăng lực",
                   "roughness": "độ giật của lực", "n_peaks": "số lần ép trong chu kỳ", "early_level": "lực đoạn đầu hành trình",
-                  "mid_level": "lực giữa hành trình", "duration_s": "thời gian ép"},
+                  "mid_level": "lực giữa hành trình", "duration_s": "thời gian ép",
+                  "n_prominent": "số lần ép rõ rệt", "late_level": "lực cuối hành trình", "mid_jerk": "độ giật lực giữa hành trình"},
         faults=["Thiếu chi tiết", "Chi tiết lệch vị trí", "Ép hai lần", "Chi tiết sai kích thước"],
         sim=True),
     "torque": dict(
@@ -28,7 +30,8 @@ PROFILES = {
         signal="Mô-men siết", unit="N·m", cycle="lần siết", recipe="Mã bu-lông",
         features={"peak": "mô-men cuối", "t_peak": "thời điểm đạt mô-men", "rise_slope": "độ dốc siết",
                   "early_level": "mô-men lúc vặn tự do", "mid_level": "mô-men lúc chạm mặt", "roughness": "độ giật mô-men",
-                  "duration_s": "thời gian siết"},
+                  "duration_s": "thời gian siết", "n_prominent": "số lần siết rõ rệt", "late_level": "mô-men cuối lần siết",
+                  "mid_jerk": "độ giật khi chạm mặt"},
         faults=["Trờn ren", "Ren chéo", "Chưa đủ lực", "Thiếu bu-lông"],
         sim=True),
     "cnc": dict(
@@ -37,7 +40,8 @@ PROFILES = {
         features={"peak": "tải cắt cực đại", "trough": "tải nền khi chạy không", "t_peak": "thời điểm tải lớn nhất",
                   "mean_level": "tải cắt trung bình", "rise_slope": "tốc độ tăng tải khi vào dao",
                   "roughness": "độ rung tải (chatter)", "n_peaks": "số lần ăn dao", "early_level": "tải đoạn đầu chương trình",
-                  "mid_level": "tải đoạn giữa chương trình", "duration_s": "thời gian gia công"},
+                  "mid_level": "tải đoạn giữa chương trình", "duration_s": "thời gian gia công",
+                  "n_prominent": "số lần ăn dao rõ rệt", "late_level": "tải lần ăn dao cuối", "mid_jerk": "độ giật tải giữa chương trình"},
         faults=["Mòn dao", "Gãy / mẻ dao", "Rung (chatter)", "Phôi sai kích thước", "Thiếu dung dịch làm mát"],
         sim=True),
     "weld": dict(
@@ -58,7 +62,8 @@ PROFILES = {
         label="Cụm khí nén / kiểm tra rò", icon="air", process="AIR_PRESSURE",
         signal="Áp suất khí", unit="bar", cycle="chu kỳ", recipe="Mã hàng",
         features={"trough": "áp thấp nhất khi xi-lanh chạy", "mean_level": "áp trung bình", "roughness": "độ giật áp",
-                  "mid_level": "áp lúc hồi", "duration_s": "thời gian chu kỳ"},
+                  "mid_level": "áp lúc hồi", "duration_s": "thời gian chu kỳ",
+                  "late_level": "áp cuối chu kỳ", "mid_jerk": "độ giật áp khi van đóng mở"},
         faults=["Rò khí", "Nguồn khí yếu", "Van kẹt"],
         sim=True),
     "generic": dict(

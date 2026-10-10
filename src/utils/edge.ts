@@ -135,7 +135,7 @@ export const tsDate = (s: number) =>
 export const recipeLabel = (r: string) => (r === '*' ? 'Mặc định' : r);
 
 export const KIND_VI: Record<string, string> = {
-  initial: 'Học lần đầu', drift: 'Học lại định kỳ', new_normal: 'Thêm chế độ mới', relearn: 'Học lại',
+  initial: 'Học lần đầu', drift: 'Học lại định kỳ', new_normal: 'Thêm chế độ mới', false_alarm: 'Học lại theo báo nhầm', relearn: 'Học lại',
 };
 
 export const STATUS_VI: Record<VersionRow['status'], string> = {

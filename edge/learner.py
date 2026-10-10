@@ -25,7 +25,7 @@ from . import detector as DT
 from .profiles import PROCESS_TO_TYPE
 
 DEFAULTS = dict(learn_target=300, retrain_every=500, drift_window=300, min_drift=50,
-                new_normal_min=10, auto_approve=False, shift_warn=1.0,
+                new_normal_min=5, auto_approve=False, shift_warn=1.0,
                 clf_min_total=10, clf_min_per_type=3)
 
 
@@ -144,7 +144,8 @@ class Brain:
         sh = DT.shift(c["active"]["body"], body) if c["active"] else 0.0
         sh0 = DT.shift(c["origin"]["body"], body) if c["origin"] else 0.0
         body["shift"], body["shift_origin"] = round(sh, 3), round(sh0, 3)
-        why = {"drift": "Học lại định kỳ", "new_normal": "Thêm chế độ bình thường mới"}.get(kind, "Học lại")
+        why = {"drift": "Học lại định kỳ", "new_normal": "Thêm chế độ bình thường mới",
+               "false_alarm": "Học lại theo phản hồi báo nhầm"}.get(kind, "Học lại")
         note = (f"{why} trên {len(X)} chu kỳ gần nhất · chuẩn dịch {sh:.2f}σ so với bản đang chạy, "
                 f"{sh0:.2f}σ so với bản gốc{extra_note}")
         v = s.add_model(self.mid, recipe, body, kind, note)
@@ -221,18 +222,21 @@ class Brain:
         if label == "fault":
             self._fit_classifier()
             out["classifier"] = self.clf_info
-        if label == "new_normal":
-            n = self.store.q("""SELECT COUNT(*) c FROM cycles WHERE machine=? AND recipe=? AND label='new_normal'
+        # Báo nhầm và Bình thường mới đều là "chu kỳ bình thường đã được người xác nhận". Đủ new_normal_min nhãn
+        # kể từ bản mô hình gần nhất thì tự tạo bản học lại chờ duyệt — không phải đợi tới lần học lại định kỳ.
+        # (Trên dữ liệu thật Bosch CNC, học lại theo phản hồi kiểu này giảm báo nhầm từ ~44% xuống ~16–19%.)
+        if label in ("new_normal", "false_alarm"):
+            n = self.store.q("""SELECT COUNT(*) c FROM cycles WHERE machine=? AND recipe=? AND label IN ('new_normal','false_alarm')
                                 AND id > COALESCE((SELECT MAX(json_extract(body,'$.source_cycles[1]')) FROM models
                                 WHERE machine=? AND recipe=? AND status IN ('active','pending')),0)""",
                              (self.mid, a["recipe"], self.mid, a["recipe"]), one=True)["c"]
             out["new_normal_count"] = n
             if n >= self.cfg["new_normal_min"] and not self._rc(a["recipe"])["pending"]:
-                out["candidate"] = self._candidate(a["recipe"], kind="new_normal")
+                out["candidate"] = self._candidate(a["recipe"], kind=label)
                 if not out["candidate"]:
                     out["note"] = f"Cần ít nhất {self.cfg['min_drift']} chu kỳ bình thường gần đây để tạo bản học lại"
             elif n < self.cfg["new_normal_min"]:
-                out["note"] = f"Đã có {n}/{self.cfg['new_normal_min']} chu kỳ bình thường mới — đủ thì tự tạo bản học lại"
+                out["note"] = f"Đã có {n}/{self.cfg['new_normal_min']} chu kỳ được xác nhận bình thường — đủ thì tự tạo bản học lại"
         return out
 
     # ───────────── phân loại lỗi (khi đã đủ nhãn) ─────────────
@@ -256,7 +260,8 @@ class Brain:
 
     @staticmethod
     def _rel(body, f):
-        return (np.asarray(f, dtype=float) - np.asarray(body["med"])) / np.asarray(body["scale"])
+        med = np.asarray(body["med"])
+        return (np.asarray(f, dtype=float)[:len(med)] - med) / np.asarray(body["scale"])
 
     def _fit_classifier(self):
         peers = self.peers()
@@ -267,6 +272,10 @@ class Brain:
             if body is None:
                 continue
             X.append(self._rel(body, f)); y.append(ft); src[mach] += 1
+        if X:   # mô hình từ phiên bản cũ có ít đặc trưng hơn → chỉ giữ nhãn cùng số đặc trưng phổ biến nhất
+            d = Counter(len(x) for x in X).most_common(1)[0][0]
+            keep = [i for i, x in enumerate(X) if len(x) == d]
+            X, y = [X[i] for i in keep], [y[i] for i in keep]
         cnt = Counter(y)
         types = {k: v for k, v in cnt.items() if v >= self.cfg["clf_min_per_type"]}
         ready = len(y) >= self.cfg["clf_min_total"] and len(types) >= 2
@@ -284,7 +293,10 @@ class Brain:
     def suggest(self, f, body):
         if self.clf is None:
             return None
-        p = self.clf.predict_proba([self._rel(body, f)])[0]
+        z = self._rel(body, f)
+        if len(z) != self.clf.n_features_in_:
+            return None
+        p = self.clf.predict_proba([z])[0]
         i = int(np.argmax(p))
         return dict(type=str(self.clf.classes_[i]), prob=round(float(p[i]), 2))
 
